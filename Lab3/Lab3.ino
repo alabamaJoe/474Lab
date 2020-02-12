@@ -2,7 +2,8 @@
 #include <Elegoo_GFX.h>    // Core graphics library
 #include <Elegoo_TFTLCD.h> // Hardware-specific library
 #include <TouchScreen.h>   // Touch screen library
-#include "Lab1.h"
+#include "Lab3.h"
+#include "TimerOne.h"
 
 // Digital pin macros
 #define CONTACT_INDICATOR_PIN   23
@@ -60,8 +61,9 @@ static TCB measureTask;
 static TCB tftTask;
 static TCB schedulerTask;
 static TCB startupTask;
+static TCB intraSysCommTask;
 
-static TCB* taskArray[] = {&socTask, &measureTask, &alarmTask, &contactTask, &tftTask};   // TCB pointer queue for scheduler
+static TCB* taskArray[] = {&measureTask, &tftTask, &intraSysCommTask, &socTask, &contactTask, &alarmTask};   // TCB pointer queue for scheduler
 static long waitTime;
 
 static int screenDisplay = BATTERY_SCREEN;  // Variable that determines which screen to show during TFT task
@@ -122,13 +124,15 @@ struct tftStruct{
   bool* controlPtr;
 }; typedef struct tftStruct dataTft;
 
-struct handlerStruct{
-  TCB** pointerToTCBArray;
-}; typedef struct handlerStruct dataScheduler;
+struct schedulerStruct{
+  TCB* (*pointerToTCBArray)[6];
+}; typedef struct schedulerStruct dataScheduler;
 
 struct startupStruct{
-  
+  TCB* (*pointerToTCBArray)[6];
 }; typedef struct startupStruct dataStartup;
+
+volatile int timeBaseFlag = 0; // Global time base flag set by Timer Interrupt
 
 
 ///////////////////Flags/////////////////////
@@ -142,7 +146,6 @@ void setup() {
   // put your setup code here, to run once:
 
   initializeStructs();
-  *startupTask.myTask;  // call Startup task
 
   Serial.begin(9600);
   Serial.println(F("TFT LCD test"));  //prints a msg that we should see when booting up
@@ -204,37 +207,61 @@ void setup() {
 
   tft.fillRect(180, 8.5*MEASURE_Y_SPACING, 50, 50, GREEN); //Draws Right Button for keypad
   tft.drawRect(180, 8.5*MEASURE_Y_SPACING, 50, 50, WHITE);
-
+  *startupTask.myTask;  // call Startup task
 }
 
 void loop() {
-  schedulerHandler(schedulerTask.taskDataPtr);  // Calls out scheduler 
-
+  while(timeBaseFlag == 1){
+    timeBaseFlag = 0;
+    schedulerFunction(schedulerTask.taskDataPtr);  // Calls out scheduler 
+  }
 }
 
-// Startup task that initalizes GPIOs
+// Startup task that initalizes GPIOs, Timer interrupt, and task linkedlist
 static void startupFunction(void* arg){   
+  dataStartup* localDataPtr = (dataStartup*) arg;
+  Timer1.initialize(100000); 
+  Timer1.attachInterrupt(timerISR);
+  Timer1.start();
   pinMode(CONTACT_INDICATOR_PIN, OUTPUT);   // Setup up GPIO output pin
   pinMode(HVIL_READ_PIN, INPUT_PULLUP);            // Setup up GPIO input pin
   pinMode(45, OUTPUT);
   digitalWrite(45, LOW);
-  
+//  measureTask.prev = NULL;
+//  measureTask.next = tftTask.prev;    // Setting up TCB task linked list
+//  tftTask.next = intraSysCommTask.prev;
+//  intraSysCommTask.next = socTask.prev;
+//  socTask.next = contactTask.prev;
+//  contactTask.next = alarmTask.prev;
+//  alarmTask.next = NULL;
+
+  for (int i = 0; i < 5; i++){
+    TCB* task = *localDataPtr->pointerToTCBArray[i];
+    TCB* nextTask = *localDataPtr->pointerToTCBArray[i+1];
+    task->next = nextTask->prev;
+  }
 }
 
 // Scheduler task that uses task queue to perform a round robin scheduler
-static void schedulerHandler(void* arg){
+static void schedulerFunction(void* arg){
   dataScheduler* localDataPtr = (dataScheduler* ) arg;
-  TCB* localTaskArray = *localDataPtr->pointerToTCBArray;
+ 
+  TCB* taskNode = *(localDataPtr->pointerToTCBArray[0]);
   for (int i = 0; i < 5; i++){   // For loop to ensure that each task gets called
-    TCB* temp = taskArray[i];
-    temp->myTask((temp->taskDataPtr));
+    taskNode->myTask((taskNode->taskDataPtr));
+    taskNode = taskNode->next;
   }
 
 }
 
+void intraSystemCommFunction(void* arg){
+  Serial.println(2);
+}
+
 // TFT display + keypad task that is capable of displaying one of the three screens (measurement, alarm, batteryon/off) at a time
 void tftFunction(void* arg){
-
+  Serial.println(1);
+/*
   screenPressed = 0;
   Serial.print("After: ");
   Serial.println(screenPressed);
@@ -417,9 +444,7 @@ void tftFunction(void* arg){
       samplePress(localDataPtr);
       tft.print("OFF");
       samplePress(localDataPtr);
-  }
-
-  
+  }*/
 }
 
 // Helper function that takes in touch pressure coordinates and determines whether or not the stylus actually touched a button
@@ -471,19 +496,12 @@ static void samplePress(void* arg){
 
 // measure task that determines and cycles through the dummy values of measurement data to be displayed
 static void measureFunction(void* arg){
-
+  Serial.println(3);
+/*
   dataMeasure* localDataPtr = (dataMeasure* ) arg;
-
-  if (measureCntr % 6 < 2){   // Handles dummy temp values and Isol Resistance
-    *(localDataPtr->tempPtr) = -10;
-    *(localDataPtr->isolResHVPtr) = 0;
-  }else if (measureCntr % 6 < 4){
-    *(localDataPtr->tempPtr) = 5;
-    *(localDataPtr->isolResHVPtr) = 10000;
-  }else if (measureCntr % 6 < 6){
-    *(localDataPtr->tempPtr) = 25;
-    *(localDataPtr->isolResHVPtr) = 100000;
-  }
+  *localDataPtr->tempPtr = 0;
+  *localDataPtr->isolResHVPtr = 0;
+  *localDataPtr->modeHVPtr = "0";
 
   if (measureCntr % 5 == 0){    // Handles dummy current values
     *(localDataPtr->currentHVPtr) = -20;
@@ -499,11 +517,6 @@ static void measureFunction(void* arg){
     *(localDataPtr->voltageHVPtr) = 450;
   }
 
-  if (measureCntr % 6 < 3){   // Handles HV Isolation ckt operating mode data
-    *(localDataPtr->modeHVPtr) = "NORMAL      ";
-  } else{
-    *(localDataPtr->modeHVPtr) = "DEVICE_ERROR";
-  }
 
   if (digitalRead(HVIL_READ_PIN)){    // Handles HVIL status data
     *(localDataPtr->hvilInputStatePtr) = "OPEN  ";
@@ -512,22 +525,25 @@ static void measureFunction(void* arg){
   }
 
   measureCntr++;
+  */
 
 }
 
 // SOC task that sets up the SOC dummy value to be displayed
 static void socFunction(void* arg){
- 
+  Serial.println(6);
+  /*
   dataSOC* localDataPtr = (dataSOC* ) arg;
   int remainder = socCntr % 5;
   *(localDataPtr->socPtr) = remainder * 25;
-  socCntr++;
+  socCntr++;*/
 
 }
 
 // Contacter task that applies contactor state diagram
 static void contactFunction(void * arg){
-
+  Serial.println(4);
+/*
   dataContact* localDataPtr = (dataContact* ) arg;
   if(*(localDataPtr->control)){   // If Battery turn On button is pressed, we close the contactors
     *(localDataPtr->state) = "CLOSED";
@@ -536,11 +552,14 @@ static void contactFunction(void * arg){
     *(localDataPtr->state) = "OPEN";
     digitalWrite(CONTACT_INDICATOR_PIN, LOW);
   }
+  */
 
 }
 
 // Alarm task that determines and cycles the alarm dummy values to be displayed 
 void alarmFunction(void * arg){
+  Serial.println(5);
+  /*
   dataAlarm* localDataPtr = (dataAlarm* )arg;
   if (alarmCntr == 18){
     alarmCntr = 0;
@@ -572,6 +591,7 @@ void alarmFunction(void * arg){
 
 //  Serial.println(*(localDataPtr->hvorPtr));
   alarmCntr++; 
+  */
 
 }
 
@@ -584,6 +604,8 @@ void initializeStructs(){
   alarmData.hvilPtr = &hvilState;
   alarmData.ocurrPtr = &ocurrState;
   alarmData.hvorPtr = &hvorState;
+  alarmTask.next = NULL;
+  alarmTask.prev = NULL;
 
   /////////////////// Contactor /////////////////
   contactTask.myTask = &contactFunction;
@@ -591,12 +613,16 @@ void initializeStructs(){
   contactTask.taskDataPtr = &contactData;
   contactData.state = &contactState;
   contactData.control = &batteryTurnON;
+  contactTask.next = NULL;
+  contactTask.prev = NULL;
 
   /////////////////// SOC ///////////////////////
   socTask.myTask = &socFunction;
   dataSOC socData;
   socTask.taskDataPtr = &socData;
   socData.socPtr = &soc;
+  socTask.next = NULL;
+  socTask.prev = NULL;
 
   ////////////////// Measure ////////////////////
   measureTask.myTask = &measureFunction;
@@ -608,6 +634,8 @@ void initializeStructs(){
   measureData.isolResHVPtr = &isolResHV;
   measureData.modeHVPtr = &modeHV;
   measureData.hvilInputStatePtr = &hvilInputState;
+  measureTask.next = NULL;
+  measureTask.prev = NULL;
 
   ////////////////// TFT //////////////////////////
   tftTask.myTask = &tftFunction;
@@ -626,16 +654,29 @@ void initializeStructs(){
   tftData.screenPtr = &screenDisplay;
   tftData.firstTimeScreenPtr = &firstTimeScreen;
   tftData.controlPtr = &batteryTurnON;
+  tftTask.next = NULL;
+  tftTask.prev = NULL;
 
   Serial.println("Finish Initializing Structs");
 
   ////////////////// Scheduler ////////////////////
-  schedulerTask.myTask = &schedulerHandler;
+  schedulerTask.myTask = &schedulerFunction;
   dataScheduler schedulerData;
   schedulerTask.taskDataPtr = &schedulerData;
-//  schedulerData.pointerToTCBArray = &taskArray;
+  schedulerData.pointerToTCBArray = &taskArray;
+  schedulerTask.next = NULL;
+  schedulerTask.prev = NULL;
 
   //////////////////Startup/////////////////////////
   startupTask.myTask = &startupFunction;
+  dataStartup startupData;
+  startupTask.taskDataPtr = &startupData;
+  startupData.pointerToTCBArray = &taskArray;
+  startupTask.next = NULL;
+  startupTask.prev = NULL;
   
+}
+
+void timerISR(){
+  timeBaseFlag = 1;
 }
