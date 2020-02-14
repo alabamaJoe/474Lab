@@ -3,7 +3,7 @@
 #include <Elegoo_TFTLCD.h> // Hardware-specific library
 #include <TouchScreen.h>   // Touch screen library
 #include "Lab3.h"
-#include "TimerOne.h"
+#include <TimerOne.h>
 
 // Digital pin macros
 #define CONTACT_INDICATOR_PIN   23
@@ -61,9 +61,9 @@ static TCB measureTask;
 static TCB tftTask;
 static TCB schedulerTask;
 static TCB startupTask;
-static TCB intraSysCommTask;
+static TCB iSCTask;
 
-static TCB* taskArray[] = {&measureTask, &tftTask, &intraSysCommTask, &socTask, &contactTask, &alarmTask};   // TCB pointer queue for scheduler
+static TCB* taskArray[] = {&measureTask, &tftTask, &iSCTask, &socTask, &contactTask, &alarmTask};   // TCB pointer queue for scheduler
 static long waitTime;
 
 static int screenDisplay = BATTERY_SCREEN;  // Variable that determines which screen to show during TFT task
@@ -126,11 +126,16 @@ struct tftStruct{
 
 struct schedulerStruct{
   TCB* (*pointerToTCBArray)[6];
+  TCB* firstNode;
 }; typedef struct schedulerStruct dataScheduler;
 
 struct startupStruct{
   TCB* (*pointerToTCBArray)[6];
 }; typedef struct startupStruct dataStartup;
+
+struct iSCStruct{
+  
+}; typedef struct iSCStruct dataiSC;
 
 volatile int timeBaseFlag = 0; // Global time base flag set by Timer Interrupt
 
@@ -145,9 +150,8 @@ TSPoint p;
 void setup() {
   // put your setup code here, to run once:
 
-  initializeStructs();
-
   Serial.begin(9600);
+  initializeStructs();
   Serial.println(F("TFT LCD test"));  //prints a msg that we should see when booting up
 
 
@@ -207,7 +211,11 @@ void setup() {
 
   tft.fillRect(180, 8.5*MEASURE_Y_SPACING, 50, 50, GREEN); //Draws Right Button for keypad
   tft.drawRect(180, 8.5*MEASURE_Y_SPACING, 50, 50, WHITE);
-  *startupTask.myTask;  // call Startup task
+  
+  
+  startupTask.myTask(startupTask.taskDataPtr);  // call Startup task
+  Timer1.initialize(100000); 
+  Timer1.attachInterrupt(timerISR);  
 }
 
 void loop() {
@@ -220,51 +228,47 @@ void loop() {
 // Startup task that initalizes GPIOs, Timer interrupt, and task linkedlist
 static void startupFunction(void* arg){   
   dataStartup* localDataPtr = (dataStartup*) arg;
-  Timer1.initialize(100000); 
-  Timer1.attachInterrupt(timerISR);
-  Timer1.start();
-  pinMode(CONTACT_INDICATOR_PIN, OUTPUT);   // Setup up GPIO output pin
-  pinMode(HVIL_READ_PIN, INPUT_PULLUP);            // Setup up GPIO input pin
-  pinMode(45, OUTPUT);
-  digitalWrite(45, LOW);
-//  measureTask.prev = NULL;
-//  measureTask.next = tftTask.prev;    // Setting up TCB task linked list
-//  tftTask.next = intraSysCommTask.prev;
-//  intraSysCommTask.next = socTask.prev;
-//  socTask.next = contactTask.prev;
-//  contactTask.next = alarmTask.prev;
-//  alarmTask.next = NULL;
+
+//  pinMode(CONTACT_INDICATOR_PIN, OUTPUT);   // Setup up GPIO output pin
+//  pinMode(HVIL_READ_PIN, INPUT_PULLUP);            // Setup up GPIO input pin
+//  pinMode(45, OUTPUT);
+//  digitalWrite(45, LOW); 
 
   for (int i = 0; i < 5; i++){
-    TCB* task = *localDataPtr->pointerToTCBArray[i];
-    TCB* nextTask = *localDataPtr->pointerToTCBArray[i+1];
-    task->next = nextTask->prev;
+    TCB* task = taskArray[i];
+    TCB* nextTask = taskArray[i+1];
+    task->next = nextTask;
+    nextTask->prev=task;
   }
+  taskArray[0]->prev = NULL;
+  taskArray[5]->next = NULL; 
+  
+  Serial.println("Finish startup");
 }
 
 // Scheduler task that uses task queue to perform a round robin scheduler
 static void schedulerFunction(void* arg){
   dataScheduler* localDataPtr = (dataScheduler* ) arg;
  
-  TCB* taskNode = *(localDataPtr->pointerToTCBArray[0]);
-  for (int i = 0; i < 5; i++){   // For loop to ensure that each task gets called
+  TCB* taskNode = localDataPtr->firstNode;
+  while(taskNode != NULL){
     taskNode->myTask((taskNode->taskDataPtr));
     taskNode = taskNode->next;
   }
-
 }
 
-void intraSystemCommFunction(void* arg){
-  Serial.println(2);
+
+void iSCFunction(void* arg){
+  Serial.println(3);
 }
 
 // TFT display + keypad task that is capable of displaying one of the three screens (measurement, alarm, batteryon/off) at a time
 void tftFunction(void* arg){
-  Serial.println(1);
-/*
+  Serial.println(2);
+
   screenPressed = 0;
-  Serial.print("After: ");
-  Serial.println(screenPressed);
+//  Serial.print("After: ");
+//  Serial.println(screenPressed);
   dataTft* localDataPtr = (dataTft* )arg;
   int state = *localDataPtr->screenPtr;
   //samplePress(localDataPtr);
@@ -273,178 +277,109 @@ void tftFunction(void* arg){
     if(firstTime){                  // Wipes the previous screens content when transtioning to a new screen. Each screen code block contains this if check
       tft.fillRect(0,0,240, 250, BLACK);
       *localDataPtr->firstTimeScreenPtr = false;
+      tft.setCursor(20,0);
+      tft.setTextColor(WHITE, BLACK); // prints measurement header
+      tft.setTextSize(3);
+      tft.print("Measurement");
+      tft.setCursor(0, MEASURE_Y_SPACING);   // Displays SOC data
+      tft.setTextSize(MEASURE_TEXT_SIZE);
+      tft.print("State of Charge: ");
+      tft.setCursor(0, 2*MEASURE_Y_SPACING);   // Displays Temperature data
+      tft.setTextSize(MEASURE_TEXT_SIZE);
+      tft.print("Temperature: ");
+      tft.setCursor(0, 3*MEASURE_Y_SPACING);   // Displays HV Current data
+      tft.setTextSize(MEASURE_TEXT_SIZE);
+      tft.print("HV Current: ");
+      tft.setCursor(0, 4*MEASURE_Y_SPACING);   // Displays HV Voltage data
+      tft.setTextSize(MEASURE_TEXT_SIZE);
+      tft.print("HV Voltage: ");
+      tft.setCursor(0, 5*MEASURE_Y_SPACING);   // Displays HV Isolation Resistance data
+      tft.setTextSize(MEASURE_TEXT_SIZE);
+      tft.print("HVIRes: ");
+      tft.setCursor(0, 6*MEASURE_Y_SPACING);   // Displays HV Isolation Mode data
+      tft.setTextSize(MEASURE_TEXT_SIZE);
+      tft.print("HVIMod: ");
+      tft.setCursor(0, 7*MEASURE_Y_SPACING);   // Displays HVIL data
+      tft.setTextSize(MEASURE_TEXT_SIZE);
+      tft.print("HVIL Status: ");
     }
-    samplePress(localDataPtr);  // samples if we detect a touch screen
-    tft.setCursor(20,0);
     samplePress(localDataPtr);
-    tft.setTextColor(WHITE, BLACK); // prints measurement header
-    samplePress(localDataPtr);
-    tft.setTextSize(3);
-    samplePress(localDataPtr);
-    tft.print("Measurement");
-    samplePress(localDataPtr);
-  
-    tft.setCursor(0, MEASURE_Y_SPACING);   // Displays SOC data
-    tft.setTextSize(MEASURE_TEXT_SIZE);
-    tft.print("State of Charge: ");
-    samplePress(localDataPtr);
-    if (!*(localDataPtr->socPtr)){
-      tft.fillRect(228, MEASURE_Y_SPACING, 50, 15, BLACK);
-    }
+    tft.setCursor(190, MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->socPtr));
-    samplePress(localDataPtr);
   
-    tft.setCursor(0, 2*MEASURE_Y_SPACING);   // Displays Temperature data
-    samplePress(localDataPtr);
-    tft.setTextSize(MEASURE_TEXT_SIZE);
-    tft.print("Temperature: ");
-    samplePress(localDataPtr);
-    if (*(localDataPtr->tempPtr) == 5){
-      tft.fillRect(150, 2*MEASURE_Y_SPACING, 100, 15, BLACK);
-    }
-    samplePress(localDataPtr);
+    tft.setCursor(143, 2*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->tempPtr));
-    samplePress(localDataPtr);
    
-    tft.setCursor(0, 3*MEASURE_Y_SPACING);   // Displays HV Current data
-    samplePress(localDataPtr);
-    tft.setTextSize(MEASURE_TEXT_SIZE);
-    samplePress(localDataPtr);
-    tft.print("HV Current: ");
-    samplePress(localDataPtr);
-    if(!*(localDataPtr->currentHVPtr)){
-      tft.fillRect(155, 3*MEASURE_Y_SPACING, 100, 15, BLACK);
-    }
-    samplePress(localDataPtr);
+    tft.setCursor(135, 3*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->currentHVPtr));
-    samplePress(localDataPtr);
   
-    tft.setCursor(0, 4*MEASURE_Y_SPACING);   // Displays HV Voltage data
-    samplePress(localDataPtr);
-    tft.setTextSize(MEASURE_TEXT_SIZE);
-    samplePress(localDataPtr);
-    tft.print("HV Voltage: ");
-    samplePress(localDataPtr);
-    if(*(localDataPtr->voltageHVPtr) == 10){
-      tft.fillRect(167, 4*MEASURE_Y_SPACING, 100, 15, BLACK);
-    }
-    samplePress(localDataPtr);
+    tft.setCursor(135, 4*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->voltageHVPtr));
-    samplePress(localDataPtr);
   
-    tft.setCursor(0, 5*MEASURE_Y_SPACING);   // Displays HV Isolation Resistance data
-    samplePress(localDataPtr);
-    tft.setTextSize(MEASURE_TEXT_SIZE);
-    samplePress(localDataPtr);
-    tft.print("HVIRes: ");
-    samplePress(localDataPtr);
+    tft.setCursor(90, 5*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->isolResHVPtr));
-    if(*(localDataPtr->isolResHVPtr) == 0){
-      tft.fillRect(108, 5*MEASURE_Y_SPACING, 100, 15, BLACK);
-    }
-    samplePress(localDataPtr);
-    
-    tft.setCursor(0, 6*MEASURE_Y_SPACING);   // Displays HV Isolation Mode data
-    samplePress(localDataPtr);
-    tft.setTextSize(MEASURE_TEXT_SIZE);
-    samplePress(localDataPtr);
-    tft.print("HVIMod: ");
-    samplePress(localDataPtr);
+
+    tft.setCursor(90, 6*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->modeHVPtr));
-    samplePress(localDataPtr);
   
-    tft.setCursor(0, 7*MEASURE_Y_SPACING);   // Displays HVIL data
-    samplePress(localDataPtr);
-    tft.setTextSize(MEASURE_TEXT_SIZE);
-    samplePress(localDataPtr);
-    tft.print("HVIL Status: ");
-    samplePress(localDataPtr);
+    tft.setCursor(150, 7*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->hvilInputStatePtr));
-    samplePress(localDataPtr);
   }else if (state == ALARM_SCREEN){   // Code for displaying Alarm Screen
     if(firstTime){   
       tft.fillRect(0,0,240, 250, BLACK);
       *localDataPtr->firstTimeScreenPtr = false;
+      tft.setCursor(20,0);    // Displays Alarm header
+      tft.setTextColor(WHITE, BLACK);
+      tft.setTextSize(3);
+      tft.print("Alarm");
+
+      tft.setCursor(0, MEASURE_Y_SPACING);    // Displays HVI Alarm data
+      tft.setTextSize(MEASURE_TEXT_SIZE);
+      tft.print("HVIAlarm: ");
+
+      tft.setCursor(0, 3*MEASURE_Y_SPACING);   // Displays Overcurrent data
+      tft.print("Overcurrent: ");
+
+      tft.setCursor(0, 5*MEASURE_Y_SPACING);  // Displays HV out of range data
+      tft.print("HVOutofRange: ");
+      
     }
-    samplePress(localDataPtr);  // Displays Alarm header
-    tft.setCursor(20,0);
-    samplePress(localDataPtr);
-    tft.setTextColor(WHITE, BLACK);
-    samplePress(localDataPtr);
-    tft.setTextSize(3);
-    samplePress(localDataPtr);
-    tft.print("Alarm");
-    samplePress(localDataPtr);
-  
-    tft.setCursor(0, MEASURE_Y_SPACING);    // Displays HVI Alarm data
-    samplePress(localDataPtr);
-    tft.setTextSize(MEASURE_TEXT_SIZE);
-    samplePress(localDataPtr);
-    tft.print("HVIAlarm: ");
     samplePress(localDataPtr);
     tft.setCursor(0, 1.5*MEASURE_Y_SPACING);
-    samplePress(localDataPtr);
     tft.print(*localDataPtr->hvilPtr);
-    samplePress(localDataPtr);
-  
-    tft.setCursor(0, 3*MEASURE_Y_SPACING);   // Displays Overcurrent data
-    samplePress(localDataPtr);
-    tft.print("Overcurrent: ");
-    samplePress(localDataPtr);
+
     tft.setCursor(0, 3.5*MEASURE_Y_SPACING);
-    samplePress(localDataPtr);
     tft.print(*localDataPtr->ocurrPtr);
-    samplePress(localDataPtr);
     
-    tft.setCursor(0, 5*MEASURE_Y_SPACING);  // Displays HV out of range data
-    samplePress(localDataPtr);
-    tft.print("HVOutofRange: ");
-    samplePress(localDataPtr);
     tft.setCursor(0, 5.5*MEASURE_Y_SPACING);
-    samplePress(localDataPtr);
     tft.print(*localDataPtr->hvorPtr); 
-    samplePress(localDataPtr);
+    
   } else if (state == BATTERY_SCREEN){    // Displays battery screen
       tft.setCursor(40,0);
       if(firstTime){
         tft.fillRect(0,0,240, 250, BLACK);
         *localDataPtr->firstTimeScreenPtr = false;
+        tft.setTextColor(WHITE, BLACK);   // Displays battery header
+        tft.setTextSize(2);
+        tft.print("Battery ON/OFF");
+        tft.fillRect(50, 1.4*MEASURE_Y_SPACING, 133, 70, GREEN);  // Draws green button for turning ON battery
+        tft.drawRect(50, 1.4*MEASURE_Y_SPACING, 133, 70, WHITE);
+
+        tft.fillRect(50, 4*MEASURE_Y_SPACING, 133, 70, RED);    // Draws red button for turning OFF battery
+        tft.drawRect(50, 4*MEASURE_Y_SPACING, 133, 70, WHITE);
+
+        tft.setCursor(12, 1.5*MEASURE_Y_SPACING);   // Prints Battery turn on label
+        tft.setTextSize(MEASURE_TEXT_SIZE);
+        tft.setTextColor(WHITE);
+        tft.print("ON");
+        
+        tft.setCursor(12, 4.1*MEASURE_Y_SPACING);   // Prints Battery turn off label
+        tft.setTextSize(MEASURE_TEXT_SIZE);
+        tft.setTextColor(WHITE);
+        tft.print("OFF");
       }
-      samplePress(localDataPtr);    // Displays battery header
-      tft.setTextColor(WHITE, BLACK);
       samplePress(localDataPtr);
-      tft.setTextSize(2);
-      samplePress(localDataPtr);
-      tft.print("Battery ON/OFF");
-      samplePress(localDataPtr);
-
-      tft.fillRect(50, 1.4*MEASURE_Y_SPACING, 133, 70, GREEN);  // Draws green button for turning ON battery
-      samplePress(localDataPtr);
-      tft.drawRect(50, 1.4*MEASURE_Y_SPACING, 133, 70, WHITE);
-      samplePress(localDataPtr);
-
-      tft.fillRect(50, 4*MEASURE_Y_SPACING, 133, 70, RED);    // Draws red button for turning OFF battery
-      samplePress(localDataPtr);
-      tft.drawRect(50, 4*MEASURE_Y_SPACING, 133, 70, WHITE);
-      samplePress(localDataPtr);
-      
-      tft.setCursor(12, 1.5*MEASURE_Y_SPACING);   // Prints Battery turn on label
-      samplePress(localDataPtr);
-      tft.setTextSize(MEASURE_TEXT_SIZE);
-      samplePress(localDataPtr);
-      tft.setTextColor(WHITE);
-      tft.print("ON");
-      samplePress(localDataPtr);
-      
-      tft.setCursor(12, 4.1*MEASURE_Y_SPACING);   // Prints Battery turn off label
-      samplePress(localDataPtr);
-      tft.setTextSize(MEASURE_TEXT_SIZE);
-      samplePress(localDataPtr);
-      tft.setTextColor(WHITE);
-      samplePress(localDataPtr);
-      tft.print("OFF");
-      samplePress(localDataPtr);
-  }*/
+  }
 }
 
 // Helper function that takes in touch pressure coordinates and determines whether or not the stylus actually touched a button
@@ -496,8 +431,8 @@ static void samplePress(void* arg){
 
 // measure task that determines and cycles through the dummy values of measurement data to be displayed
 static void measureFunction(void* arg){
-  Serial.println(3);
-/*
+  Serial.println(1);
+
   dataMeasure* localDataPtr = (dataMeasure* ) arg;
   *localDataPtr->tempPtr = 0;
   *localDataPtr->isolResHVPtr = 0;
@@ -525,13 +460,12 @@ static void measureFunction(void* arg){
   }
 
   measureCntr++;
-  */
 
 }
 
 // SOC task that sets up the SOC dummy value to be displayed
 static void socFunction(void* arg){
-  Serial.println(6);
+  Serial.println(4);
   /*
   dataSOC* localDataPtr = (dataSOC* ) arg;
   int remainder = socCntr % 5;
@@ -542,7 +476,7 @@ static void socFunction(void* arg){
 
 // Contacter task that applies contactor state diagram
 static void contactFunction(void * arg){
-  Serial.println(4);
+  Serial.println(5);
 /*
   dataContact* localDataPtr = (dataContact* ) arg;
   if(*(localDataPtr->control)){   // If Battery turn On button is pressed, we close the contactors
@@ -558,7 +492,7 @@ static void contactFunction(void * arg){
 
 // Alarm task that determines and cycles the alarm dummy values to be displayed 
 void alarmFunction(void * arg){
-  Serial.println(5);
+  Serial.println(6);
   /*
   dataAlarm* localDataPtr = (dataAlarm* )arg;
   if (alarmCntr == 18){
@@ -657,13 +591,12 @@ void initializeStructs(){
   tftTask.next = NULL;
   tftTask.prev = NULL;
 
-  Serial.println("Finish Initializing Structs");
-
   ////////////////// Scheduler ////////////////////
   schedulerTask.myTask = &schedulerFunction;
   dataScheduler schedulerData;
   schedulerTask.taskDataPtr = &schedulerData;
   schedulerData.pointerToTCBArray = &taskArray;
+  schedulerData.firstNode = &measureTask;
   schedulerTask.next = NULL;
   schedulerTask.prev = NULL;
 
@@ -674,6 +607,12 @@ void initializeStructs(){
   startupData.pointerToTCBArray = &taskArray;
   startupTask.next = NULL;
   startupTask.prev = NULL;
+  Serial.println("Finish Initializing Structs");
+
+  /////////////////Intra-SysComm////////////////////
+  iSCTask.myTask = &iSCFunction;
+  dataiSC iSCData;
+  iSCTask.taskDataPtr = &iSCData;
   
 }
 
