@@ -538,10 +538,6 @@ static void contactFunction(void * arg){
     digitalWrite(CONTACT_INDICATOR_PIN, LOW);
     Serial.println("OFF");
   }
-  if(*(localDataPtr->control)){
-      Serial.println("FOSK");
-  }
-//  Serial.println(*(localDataPtr->hvilPtr));
 }
 
 // Alarm task that determines and cycles the alarm dummy values to be displayed 
@@ -564,6 +560,9 @@ void alarmFunction(void * arg){
   } else if(((((*localDataPtr->currentHVPtr) <= -5.0 || (*localDataPtr->currentHVPtr) >= 20.0))) && (((*localDataPtr->alarmsAcknowledgedPtr) == true &&  *(localDataPtr->ocurrPtr) == "ACTIVE_NOT_ACKNOWLEDGED") || (*(localDataPtr->ocurrPtr) == "ACTIVE_ACKNOWLEDGED    "))){ 
     *(localDataPtr->ocurrPtr) = "ACTIVE_ACKNOWLEDGED    ";
   } else {
+    if(*(localDataPtr->hvorPtr) == "NOT_ACTIVE             "){
+      *localDataPtr->firstTimeScreenPtr = true;
+    }
     *(localDataPtr->ocurrPtr) = "ACTIVE_NOT_ACKNOWLEDGED"; 
     (*localDataPtr->alarmsAcknowledgedPtr) = false;
   }
@@ -574,6 +573,9 @@ void alarmFunction(void * arg){
   } else if (((((*localDataPtr->voltageHVPtr) <= 280.0 || (*localDataPtr->voltageHVPtr) >= 405.0))) && (((*localDataPtr->alarmsAcknowledgedPtr) == true &&  *(localDataPtr->hvorPtr) == "ACTIVE_NOT_ACKNOWLEDGED") || (*(localDataPtr->hvorPtr) == "ACTIVE_ACKNOWLEDGED    "))){ 
     *(localDataPtr->hvorPtr) = "ACTIVE_ACKNOWLEDGED    ";
   } else {
+    if(*(localDataPtr->hvorPtr) == "NOT_ACTIVE             "){
+      *localDataPtr->firstTimeScreenPtr = true;
+    }
     *(localDataPtr->hvorPtr) = "ACTIVE_NOT_ACKNOWLEDGED";
     (*localDataPtr->alarmsAcknowledgedPtr) = false;
   }
@@ -583,7 +585,7 @@ void alarmFunction(void * arg){
     if(*localDataPtr->screenPtr != ALARM_SCREEN || *(localDataPtr->alarmsAcknowledgedPtr) == true){
       *localDataPtr->firstTimeScreenPtr = true;
     } else{
-      *localDataPtr->firstTimeScreenPtr = false;
+//      *localDataPtr->firstTimeScreenPtr = false;
     }
     *(localDataPtr->screenPtr) = ALARM_SCREEN;
   }else{
@@ -707,9 +709,11 @@ void timerISR(){
 // Action: set HVIL interrupt alarm to "ACTIVE, NOT ACKNOWLEDGED"
 //         open contactors by toggling gpio directly
 void hvilISR() {
-  HVIL_ISR_STATE = "OPEN  ";
-  alarmsAcknowledged = false;
-  batteryTurnON = false;
-  firstTimeScreen = true;
-  digitalWrite(CONTACT_INDICATOR_PIN, LOW);
+  if (HVIL_ISR_STATE == "CLOSED"){
+    HVIL_ISR_STATE = "OPEN  ";
+    alarmsAcknowledged = false;
+    batteryTurnON = false;
+    firstTimeScreen = true;
+    digitalWrite(CONTACT_INDICATOR_PIN, LOW);
+  }
 }
