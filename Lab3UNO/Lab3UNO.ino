@@ -11,6 +11,7 @@
 
 // Digital pin 
 #define CONTACT_INDICATOR_PIN   13 // the contactor 
+#define NUMBER_OF_DATUMS        2  // Number of data points that need to be measured
 
 // pins go to ATMega
 #define RX                      0
@@ -24,27 +25,27 @@ static TCB intraTask;
 static TCB* taskArray[] = {&measureTask};   // TCB pointer queue for scheduler
 
 // Variables needed for measurement
-volatile static int currentHV; // volatile as its periodic
-volatile static int voltageHV; // volatile as its periodic
+uint8_t dataArray[2 * NUMBER_OF_DATUMS];
+// int currentHV[16]; // volatile as its periodic
+// int voltageHV[16]; // volatile as its periodic
 volatile static int command;   // command from UART from mega
 //volatile int timeBaseFlag = 0; // Global time base flag set by Timer Interrupt
 
 void setup() {
   // put your setup code here, to run once:
-  initializeStructs();
-
   Serial.begin(9600);
+  initializeStructs();
   Serial.setTimeout(1000);
   Serial.println(F("TFT LCD test"));  //prints a msg that we should see when booting up
   startupTask.myTask(startupTask.taskDataPtr);
-  Timer1.initialize(100000); 
+  Timer1.initialize(1000000); 
   Timer1.attachInterrupt(timerISR);  
-  Timer1.start();
 }
 
 void loop() {
   // put your main code here, to run repeatedly:
   while(timeBaseFlag == 1){
+    //Serial.println("In main loop");
     timeBaseFlag = 0;
     schedulerFunction(schedulerTask.taskDataPtr);  // Calls out scheduler 
   }
@@ -63,9 +64,17 @@ void loop() {
 
 static void measureFunction(void* arg) {
   dataMeasure* localDataPtr = (dataMeasure* ) arg;
-
-  *(localDataPtr->voltageHVPtr) = analogRead(CIRCUIT_V);
-  *(localDataPtr->currentHVPtr) = analogRead(CIRCUIT_C);
+  int arrayData[NUMBER_OF_DATUMS];
+  arrayData[0] = analogRead(CIRCUIT_V);
+  arrayData[1] = analogRead(CIRCUIT_C);
+  for (int i = 0; i < NUMBER_OF_DATUMS; i++) {
+    (localDataPtr->dataArrayPtr[i+i]) = arrayData[i] & 0xFF;
+    (localDataPtr->dataArrayPtr[i+i+1]) = ((arrayData[i] >> 2) & 0xC0);
+  }
+  for (int i = 0; i < sizeof(dataArray); i++) {
+    //Serial.println(dataArray[i]);
+  }
+ 
 }
 
 static void startupFunction(void* arg) {
@@ -93,31 +102,44 @@ static void schedulerFunction(void* arg) {
 }
 
 void serialEvent() {
+  //Serial.println("UART invoked");
   intraSystemCommFunction(intraTask.taskDataPtr);
 }
 
 static void intraSystemCommFunction(void* arg) {
   dataIntra* localDataPtr = (dataIntra* ) arg;
-
-  while (Serial.available()) {
-    *(localDataPtr->commandPtr) = (int) Serial.read();
-
-    if (*(localDataPtr->commandPtr) == 0) { // pass v and c to UART
-      Serial.println(command); // chekcking if passing the right command 
-//      int vc[2];
-//      vc[0] = *(localDataPtr->voltageHVPtr);
-//      vc[1] = *(localDataPtr->currentHVPtr);
-      Serial.write(*(localDataPtr->voltageHVPtr));
-      Serial.write(*(localDataPtr->currentHVPtr));
-    } else if (*(localDataPtr->commandPtr) == 1) {  // pass v to UART
-      Serial.println(command);
-      Serial.write(*(localDataPtr->voltageHVPtr));
-    } else if (*(localDataPtr->commandPtr) == 2) {  // pass c to UART
-      Serial.println(command);
-      Serial.write(*(localDataPtr->currentHVPtr));
+  //Serial.println("In ISC Function");
+  *(localDataPtr->commandPtr) = (int) Serial.read();
+  //Serial.println(*(localDataPtr->commandPtr));
+  if (*(localDataPtr->commandPtr) == 0) { // pass v and c to UART
+    /*
+    Serial.print("Sending data for command, ");
+    Serial.println(*(localDataPtr->commandPtr)); // chekcking if passing the right command 
+    for (int i = 0; i < sizeof(dataArray); i++) {
+      Serial.println(dataArray[i]);
     }
+    */
+    Serial.write(dataArray, 2 * NUMBER_OF_DATUMS);
+    //Serial.println((uint16_t) (dataArray[0] | (uint16_t) dataArray[1] << 2));
+    //Serial.println((uint16_t) (dataArray[2] | (uint16_t) dataArray[3] << 2));
+    /*
+    Serial.println((uint16_t) (dataArray[0] | (uint16_t) dataArray[1] << 2));
+    Serial.println((uint16_t) (dataArray[2] | (uint16_t) dataArray[3] << 2));
+    Serial.print("Done sending ");
+    Serial.print(bytesSent);
+    Serial.println(" bytes!");
+    */
+  } 
+  /*else if (*(localDataPtr->commandPtr) == 1) {  // pass v to UART
+    Serial.println(command);
+    Serial.write(*(localDataPtr->voltageHVPtr));
+  } else if (*(localDataPtr->commandPtr) == 2) {  // pass c to UART
+    Serial.println(command);
+    Serial.write(*(localDataPtr->currentHVPtr));
   }
-  
+  */
+  //Serial.println();
+  //Serial.println();
 }
 
 void initializeStructs(){
@@ -125,8 +147,9 @@ void initializeStructs(){
   measureTask.myTask = &measureFunction;
   dataMeasure measureData;
   measureTask.taskDataPtr = &measureData;
-  measureData.currentHVPtr = &currentHV;
-  measureData.voltageHVPtr = &voltageHV;
+  measureData.dataArrayPtr = &dataArray[0];
+  //measureData.currentHVPtr = &dataArray[0];
+  //measureData.voltageHVPtr = &dataArray[0];
   measureTask.next = NULL;
   measureTask.prev = NULL;
   
@@ -134,8 +157,9 @@ void initializeStructs(){
   intraTask.myTask = &intraSystemCommFunction;
   dataIntra intraData;
   intraTask.taskDataPtr = &intraData;
-  intraData.currentHVPtr = &currentHV;
-  intraData.voltageHVPtr = &voltageHV;
+  intraData.dataArrayPtr = &dataArray[0];
+  //intraData.currentHVPtr = &dataArray[0];
+  //intraData.voltageHVPtr = &dataArray[0];
   intraData.commandPtr = &command;
   intraTask.next = NULL;
   intraTask.prev = NULL;
@@ -157,7 +181,7 @@ void initializeStructs(){
   startupData.pointerToTCBArray = &taskArray;
   startupTask.next = NULL;
   startupTask.prev = NULL;
-  
+  Serial.println("Finish Initializing Structs");
 }
 
 void timerISR(){

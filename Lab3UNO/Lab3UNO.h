@@ -10,8 +10,9 @@ struct MyStruct{
 
 /////////////////// taskDataPtr instantiations for each task ///////////////
 struct measureStruct{
-  volatile int* currentHVPtr; //
-  volatile int* voltageHVPtr; //
+  uint8_t* dataArrayPtr;
+  //uint8_t* currentHVPtr; 
+  //uint8_t* voltageHVPtr; 
 }; typedef struct measureStruct dataMeasure;
 
 struct schedulerStruct{
@@ -21,8 +22,9 @@ struct schedulerStruct{
 
 struct intraSysCommStruct{
   volatile int* commandPtr;
-  volatile int* currentHVPtr; //
-  volatile int* voltageHVPtr; //
+  uint8_t* dataArrayPtr;
+  //uint8_t* currentHVPtr; 
+  //uint8_t* voltageHVPtr; 
 }; typedef struct intraSysCommStruct dataIntra;
 
 struct startupStruct{
