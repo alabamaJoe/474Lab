@@ -47,7 +47,7 @@
 #define XP 8   // can be a digital pin
 
 // Pressure touchscreen parameters
-#define MINPRESSURE 50
+#define MINPRESSURE 30
 #define MAXPRESSURE 1000
 
 //Different Screens for TFT
@@ -73,7 +73,7 @@ static TCB iSCTask;
 static TCB* taskArray[] = {&measureTask, &tftTask, &iSCTask, &socTask, &contactTask, &alarmTask};   // TCB pointer queue for scheduler
 static long waitTime;
 
-static int screenDisplay = BATTERY_SCREEN;  // Variable that determines which screen to show during TFT task
+static int screenDisplay = MEASUREMENT_SCREEN;  // Variable that determines which screen to show during TFT task
 
 volatile String HVIL_ISR_STATE;
 String hvilState; 
@@ -87,21 +87,22 @@ static int screenPressed = 0;
 
 
 static int temp;  // Variables needed for measurement
-volatile static int currentHV;
-volatile static int voltageHV;
-volatile static int command;  // Command to specify which data is desired
+volatile static double currentHV;
+volatile static double voltageHV;
+volatile static byte command;  // Command to specify which data is desired
 static long isolResHV;
 static String modeHV;
 
 /////////////////// taskDataPtr instantiations for each task ///////////////
 struct alarmStruct{
-  int* currentHVPtr;
-  int* voltageHVPtr;
+  double* currentHVPtr;
+  double* voltageHVPtr;
   String* hvilPtr;
   String* HVIL_ISR_STATE_PTR;
   String* ocurrPtr;
   String* hvorPtr;
   String* hvilInputStatePtr;
+  bool* alarmsAcknowledgedPtr;
 }; typedef struct alarmStruct dataAlarm;
 
 struct contactStruct{
@@ -114,20 +115,11 @@ struct socStruct{
   int* socPtr;
 }; typedef struct socStruct dataSOC;
 
-struct measureStruct{
-  int* tempPtr;
-  int* currentHVPtr;
-  int* voltageHVPtr;
-  long* isolResHVPtr;
-  String* modeHVPtr;
-  String* hvilInputStatePtr;
-}; typedef struct measureStruct dataMeasure;
-
 struct tftStruct{
   int* socPtr;    // Measurement screen variables
   int* tempPtr;
-  int* currentHVPtr;
-  int* voltageHVPtr;
+  double* currentHVPtr;
+  double* voltageHVPtr;
   long* isolResHVPtr;
   String* modeHVPtr;
   String* hvilInputStatePtr;
@@ -137,6 +129,7 @@ struct tftStruct{
   int* screenPtr;
   bool* firstTimeScreenPtr;
   bool* controlPtr;
+  bool* alarmsAcknowledgedPtr;
 }; typedef struct tftStruct dataTft;
 
 struct schedulerStruct{
@@ -149,10 +142,21 @@ struct startupStruct{
 }; typedef struct startupStruct dataStartup;
 
 struct iSCStruct{
-  volatile int* voltageHVPtr;
-  volatile int* currentHVPtr;
-  int* commandPtr;
+  volatile double* voltageHVPtr;
+  volatile double* currentHVPtr;
+  byte* commandPtr;
 }; typedef struct iSCStruct dataiSC;
+
+struct measureStruct{
+  int* tempPtr;
+  double* currentHVPtr;
+  double* voltageHVPtr;
+  long* isolResHVPtr;
+  String* modeHVPtr;
+  String* hvilInputStatePtr;
+  iSCStruct* dataiSCPtr;
+  bool* alarmsAcknowledgedPtr;
+}; typedef struct measureStruct dataMeasure;
 
 volatile int timeBaseFlag = 0; // Global time base flag set by Timer Interrupt
 
@@ -162,7 +166,7 @@ static String hvilInputState = "OPEN";
 static String contactState = "OPEN";
 static bool batteryTurnON = false;
 static bool firstTimeScreen = true;
-static bool needAcknowledgement = false;
+static bool alarmsAcknowledged = false;
 TSPoint p;
 
 void setup() {
@@ -246,6 +250,7 @@ void loop() {
   while(timeBaseFlag == 1){
     timeBaseFlag = 0;
     schedulerFunction(schedulerTask.taskDataPtr);  // Calls out scheduler 
+//    intraSystemCommFunction(iSCTask.taskDataPtr);
   }
 }
 
@@ -281,15 +286,39 @@ static void schedulerFunction(void* arg){
   }
 }
 
-
-void iSCFunction(void* arg){
-  Serial.println(3);
+// Intra-system communication task that sends UART command to peripheral to obtain current and voltage readings
+void intraSystemCommFunction(void* arg){
+  dataiSC* localDataPtr = (dataiSC* ) arg;
+  int dataSize;
+  *(localDataPtr->commandPtr) = 0x00;
+  Serial.println(*(localDataPtr->commandPtr));
+  Serial1.write(*(localDataPtr->commandPtr));
+  if (*(localDataPtr->commandPtr) == 0) {
+    // Receiving currentHV and voltageHV data
+    dataSize = 2 * UART_BYTE_LENGTH;
+  } else {
+    // Receiving only currentHV or voltageHV data
+    dataSize = UART_BYTE_LENGTH;
+  }
+  byte receivedData[dataSize]; 
+  while (Serial1.available()) {
+    int charactersRead = Serial1.readBytesUntil('\r', receivedData, dataSize);
+  }
+  for(int i =0; i< dataSize; i++){
+      Serial.println(receivedData[i]);
+  }
+  uint16_t current = (receivedData[0]) | ((uint16_t)receivedData[1] << 2);
+  uint16_t volt = (receivedData[2]) | ((uint16_t)receivedData[3] << 2);
+  
+  *localDataPtr->voltageHVPtr = (volt / 1024.0) * 450;     // Converting according to voltage range
+  *localDataPtr->currentHVPtr = (current / 1024.0) * 10 - 25;    // Converting according to current range
+  Serial.println(current);
+  Serial.println(volt);
+  Serial.println();
 }
 
 // TFT display + keypad task that is capable of displaying one of the three screens (measurement, alarm, batteryon/off) at a time
 void tftFunction(void* arg){
-  Serial.println(2);
-
   screenPressed = 0;
 //  Serial.print("After: ");
 //  Serial.println(screenPressed);
@@ -455,82 +484,48 @@ static void samplePress(void* arg){
 
 // measure task that determines and cycles through the dummy values of measurement data to be displayed
 static void measureFunction(void* arg){
-  Serial.println(1);
-
   dataMeasure* localDataPtr = (dataMeasure* ) arg;
   *localDataPtr->tempPtr = 0;
   *localDataPtr->isolResHVPtr = 0;
   *localDataPtr->modeHVPtr = "0";
-
-  // Read analog input and update value
-  if (measureCntr % 5 == 0){    // Handles dummy current values
-    *(localDataPtr->currentHVPtr) = -20;
-  } else{
-    *(localDataPtr->currentHVPtr) += 10;
-  }
-
-  // Read analog input and update value
-  if (measureCntr % 9 < 3){   // Handles dummy voltage values
-    *(localDataPtr->voltageHVPtr) = 10;
-  } else if (measureCntr % 9 < 6){
-    *(localDataPtr->voltageHVPtr) = 150;
-  } else if (measureCntr % 9 < 9){
-    *(localDataPtr->voltageHVPtr) = 450;
-  }
-
   
   if (digitalRead(HVIL_READ_PIN)){    // Handles HVIL status data
     *(localDataPtr->hvilInputStatePtr) = "OPEN  ";
   } else{
     *(localDataPtr->hvilInputStatePtr) = "CLOSED";
   }
-
-  measureCntr++;
-
+  intraSystemCommFunction(localDataPtr->dataiSCPtr);    // Calls the intra-system comm task to obtain current and voltage Uart data
 }
 
 // SOC task that sets up the SOC dummy value to be displayed
 static void socFunction(void* arg){
-  Serial.println(4);
   // SOC is const 0 for now. Global variable 'soc' is set to zero
-  /*
   dataSOC* localDataPtr = (dataSOC* ) arg;
-  int remainder = socCntr % 5;
-  *(localDataPtr->socPtr) = remainder * 25;
-  socCntr++;*/
-
+  *(localDataPtr->socPtr) = 0;
 }
 
 // Contacter task that applies contactor state diagram
-static void contactFunction(void * arg){
-  Serial.println(5);
-  
+static void contactFunction(void * arg){  
   dataContact* localDataPtr = (dataContact* ) arg;
   // If Battery turn On button is pressed, we close the contactors
   if(*(localDataPtr->control) && *(localDataPtr->STATE_HVIL_ISR) == "NOT_ACTIVE"){ 
     *(localDataPtr->state) = "CLOSED";
     digitalWrite(CONTACT_INDICATOR_PIN, HIGH);
   } else{
-    *(localDataPtr->state) = "OPEN";
+    *(localDataPtr->state) = "OPEN  ";
     digitalWrite(CONTACT_INDICATOR_PIN, LOW);
   }
-
 }
 
 // Alarm task that determines and cycles the alarm dummy values to be displayed 
 void alarmFunction(void * arg){
-  Serial.println(6);
-  
   dataAlarm* localDataPtr = (dataAlarm* )arg;
-  /*if (alarmCntr == 18){
-    alarmCntr = 0;
-  }
-  */
+
   // Takes care of HVIL/HVIL Interrupt alarm data
-  if ((localDataPtr->hvilInputStatePtr) == "CLOSED"){   
+  if ((*localDataPtr->hvilInputStatePtr) == "CLOSED"){   
     *(localDataPtr->hvilPtr) = "NOT_ACTIVE             ";
     *(localDataPtr->HVIL_ISR_STATE_PTR) = "NOT_ACTIVE             ";
-  } else if ((localDataPtr->hvilInputStatePtr) == "OPEN  " && needAcknowledgement == true){
+  } else if ((*localDataPtr->hvilInputStatePtr) == "OPEN  " && localDataPtr->alarmsAcknowledgedPtr == true){
     *(localDataPtr->hvilPtr) = "ACTIVE_ACKNOWLEDGED    ";
     *(localDataPtr->HVIL_ISR_STATE_PTR) = "ACTIVE_ACKNOWLEDGED    ";
   } else { 
@@ -538,18 +533,18 @@ void alarmFunction(void * arg){
   }
 
   // Takes care of overcurrent data
-  if ((localDataPtr->currentHVPtr) < 20 && (localDataPtr->currentHVPtr) > -5){   
+  if ((*localDataPtr->currentHVPtr) < 20 && (*localDataPtr->currentHVPtr) > -5){   
     *(localDataPtr->ocurrPtr) = "NOT_ACTIVE             ";
-  } else if ((localDataPtr->currentHVPtr) <= -5 || (localDataPtr->currentHVPtr) >= 20 && needAcknowledgement == true){
+  } else if ((*localDataPtr->currentHVPtr) <= -5 || (*localDataPtr->currentHVPtr) >= 20 && localDataPtr->alarmsAcknowledgedPtr == true){
     *(localDataPtr->ocurrPtr) = "ACTIVE_ACKNOWLEDGED    ";
   } else {
     *(localDataPtr->ocurrPtr) = "ACTIVE_NOT_ACKNOWLEDGED"; 
   }
 
   // Takes care of HV out of range data
-  if ((localDataPtr->voltageHVPtr) < 405 && (localDataPtr->voltageHVPtr) > 280){   
+  if ((*localDataPtr->voltageHVPtr) < 405 && (*localDataPtr->voltageHVPtr) > 280){   
     *(localDataPtr->hvorPtr) = "NOT_ACTIVE             ";
-  } else if ((localDataPtr->voltageHVPtr) <= 280 || (localDataPtr->voltageHVPtr) >= 405 && needAcknowledgement == true){ 
+  } else if ((*localDataPtr->voltageHVPtr) <= 280 || (*localDataPtr->voltageHVPtr) >= 405 && localDataPtr->alarmsAcknowledgedPtr == true){ 
     *(localDataPtr->hvorPtr) = "ACTIVE_ACKNOWLEDGED    ";
   } else {
     *(localDataPtr->hvorPtr) = "ACTIVE_NOT_ACKNOWLEDGED";
@@ -558,24 +553,6 @@ void alarmFunction(void * arg){
   //Serial.println(*(localDataPtr->hvorPtr));
   //alarmCntr++; 
 
-}
-
-static void intraSystemCommFunction(void* arg) {
-  dataiSC* localDataPtr = (dataiSC* ) arg;
-  int size;
-  Serial1.write(*(localDataPtr->commandPtr));
-  if (*(localDataPtr->commandPtr) == 0) {
-    // Receiving currentHV and voltageHV data
-    size = 2 * UART_BYTE_LENGTH;
-  } else {
-    // Receiving only currentHV or voltageHV data
-    size = UART_BYTE_LENGTH;
-  }
-  char receivedData[size]; 
-  while (Serial1.available()) {
-    int returnValue = Serial1.readBytesUntil("/r", receivedData, size);
-    i
-  }
 }
 
 // Helper function that initializes the myTaskDataPtr members to their respective TCB task structs and initializes members to the addresses of the different global variables used
@@ -591,6 +568,7 @@ void initializeStructs(){
   alarmData.hvilInputStatePtr = &hvilInputState;
   alarmData.ocurrPtr = &ocurrState;
   alarmData.hvorPtr = &hvorState;
+  alarmData.alarmsAcknowledgedPtr = &alarmsAcknowledged;
   alarmTask.next = NULL;
   alarmTask.prev = NULL;
 
@@ -611,7 +589,17 @@ void initializeStructs(){
   socData.socPtr = &soc;
   socTask.next = NULL;
   socTask.prev = NULL;
-
+  
+  /////////////////Intra-SysComm////////////////////
+  iSCTask.myTask = &intraSystemCommFunction;
+  dataiSC iSCData;
+  iSCTask.taskDataPtr = &iSCData;
+  iSCData.voltageHVPtr = &voltageHV;
+  iSCData.currentHVPtr = &currentHV;
+  iSCData.commandPtr = &command;
+  iSCTask.next = NULL;
+  iSCTask.prev = NULL;
+  
   ////////////////// Measure ////////////////////
   measureTask.myTask = &measureFunction;
   dataMeasure measureData;
@@ -622,6 +610,8 @@ void initializeStructs(){
   measureData.isolResHVPtr = &isolResHV;
   measureData.modeHVPtr = &modeHV;
   measureData.hvilInputStatePtr = &hvilInputState;
+  measureData.dataiSCPtr = &iSCData;
+  measureData.alarmsAcknowledgedPtr = &alarmsAcknowledged;
   measureTask.next = NULL;
   measureTask.prev = NULL;
 
@@ -642,6 +632,7 @@ void initializeStructs(){
   tftData.screenPtr = &screenDisplay;
   tftData.firstTimeScreenPtr = &firstTimeScreen;
   tftData.controlPtr = &batteryTurnON;
+  tftData.alarmsAcknowledgedPtr = &alarmsAcknowledged;
   tftTask.next = NULL;
   tftTask.prev = NULL;
 
@@ -662,18 +653,9 @@ void initializeStructs(){
   startupTask.next = NULL;
   startupTask.prev = NULL;
   Serial.println("Finish Initializing Structs");
-
-  /////////////////Intra-SysComm////////////////////
-  iSCTask.myTask = &iSCFunction;
-  dataiSC iSCData;
-  iSCTask.taskDataPtr = &iSCData;
-  iSCData.voltageHVPtr = &voltageHV;
-  iSCData.currentHVPtr = &currentHV;
-  iSCData.commandPtr = &command;
-  iSCTask.next = NULL;
-  iSCTask.prev = NULL;
 }
 
+// Timer Base 10Hz ISR
 void timerISR(){
   timeBaseFlag = 1;
 }
