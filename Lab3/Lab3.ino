@@ -8,7 +8,7 @@
 // Digital pin macros
 #define CONTACT_INDICATOR_PIN   23
 #define HVIL_READ_PIN           24
-#define HVIL_ISR_PIN            3  // INT.1
+#define HVIL_ISR_PIN            21  // INT.1
 #define HV_INPUT                // Still need to deside
 #define MEASURE_Y_SPACING       30
 #define MEASURE_TEXT_SIZE       2
@@ -70,25 +70,25 @@ static TCB schedulerTask;
 static TCB startupTask;
 static TCB iSCTask;
 
-static TCB* taskArray[] = {&measureTask, &tftTask, &iSCTask, &socTask, &contactTask, &alarmTask};   // TCB pointer queue for scheduler
+static TCB* taskArray[] = {&measureTask, &tftTask, &socTask, &contactTask, &alarmTask};   // TCB pointer queue for scheduler
 static long waitTime;
 
 static int screenDisplay = MEASUREMENT_SCREEN;  // Variable that determines which screen to show during TFT task
 
 volatile String HVIL_ISR_STATE;
-String hvilState; 
-String ocurrState;
-static String hvorState;
+String hvilState = "NOT_ACTIVE             "; 
+String ocurrState = "NOT_ACTIVE             ";
+static String hvorState = "NOT_ACTIVE             ";
 static int soc = 0;   // SOC value, for now is just zero
 //int alarmCntr = 0;    // Counters to help determine which dummy value to output
 static int socCntr = 0;
 static int measureCntr = 0;
 static int screenPressed = 0;
-
+static bool switchToAlarm = false;
 
 static int temp;  // Variables needed for measurement
-volatile static double currentHV;
-volatile static double voltageHV;
+volatile static double currentHV;   // Stores HV current data
+volatile static double voltageHV;   // Stores HV voltage data
 volatile static byte command;  // Command to specify which data is desired
 static long isolResHV;
 static String modeHV;
@@ -103,12 +103,16 @@ struct alarmStruct{
   String* hvorPtr;
   String* hvilInputStatePtr;
   bool* alarmsAcknowledgedPtr;
+  bool* switchToAlarmPtr;
+  bool* firstTimeScreenPtr;
+  int* screenPtr;
 }; typedef struct alarmStruct dataAlarm;
 
 struct contactStruct{
   String *state;
   String *STATE_HVIL_ISR;
   bool *control;
+  String *hvilPtr;
 }; typedef struct contactStruct dataContact;
 
 struct socStruct{
@@ -130,15 +134,17 @@ struct tftStruct{
   bool* firstTimeScreenPtr;
   bool* controlPtr;
   bool* alarmsAcknowledgedPtr;
+  bool* switchToAlarmPtr;
 }; typedef struct tftStruct dataTft;
 
 struct schedulerStruct{
-  TCB* (*pointerToTCBArray)[6];
+  TCB* (*pointerToTCBArray)[5];
   TCB* firstNode;
+  tftStruct* dataTftPtr;
 }; typedef struct schedulerStruct dataScheduler;
 
 struct startupStruct{
-  TCB* (*pointerToTCBArray)[6];
+  TCB* (*pointerToTCBArray)[5];
 }; typedef struct startupStruct dataStartup;
 
 struct iSCStruct{
@@ -162,16 +168,15 @@ volatile int timeBaseFlag = 0; // Global time base flag set by Timer Interrupt
 
 
 ///////////////////Flags/////////////////////
-static String hvilInputState = "OPEN";
-static String contactState = "OPEN";
-static bool batteryTurnON = false;
-static bool firstTimeScreen = true;
-static bool alarmsAcknowledged = false;
+static String hvilInputState = "OPEN  ";
+volatile String contactState = "OPEN  ";
+volatile bool batteryTurnON = false;
+volatile bool firstTimeScreen = true;
+volatile bool alarmsAcknowledged = false;
 TSPoint p;
 
 void setup() {
   // put your setup code here, to run once:
-
   Serial.begin(9600);
   Serial1.begin(9600);
   Serial1.setTimeout(1000);
@@ -236,21 +241,19 @@ void setup() {
   tft.fillRect(180, 8.5*MEASURE_Y_SPACING, 50, 50, GREEN); //Draws Right Button for keypad
   tft.drawRect(180, 8.5*MEASURE_Y_SPACING, 50, 50, WHITE);
   
-  
   startupTask.myTask(startupTask.taskDataPtr);  // call Startup task
-  Timer1.initialize(100000); 
+  Timer1.initialize(100000);    // Sets up Timer Interrupt
   Timer1.attachInterrupt(timerISR);  
 
-  // Initialize HVIL ISR
-  //pinMode(HVIL_ISR_PIN, INPUT_PULLDOWN);
-  //attachInterrupt(digitalPinToInterrupt(HVIL_ISR_PIN), hvilISR, RISING);
+//   Initialize HVIL ISR
+  pinMode(HVIL_ISR_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(HVIL_ISR_PIN), hvilISR, RISING);
 }
 
 void loop() {
   while(timeBaseFlag == 1){
     timeBaseFlag = 0;
     schedulerFunction(schedulerTask.taskDataPtr);  // Calls out scheduler 
-//    intraSystemCommFunction(iSCTask.taskDataPtr);
   }
 }
 
@@ -258,12 +261,12 @@ void loop() {
 static void startupFunction(void* arg){   
   dataStartup* localDataPtr = (dataStartup*) arg;
 
-//  pinMode(CONTACT_INDICATOR_PIN, OUTPUT);   // Setup up GPIO output pin
-//  pinMode(HVIL_READ_PIN, INPUT_PULLUP);            // Setup up GPIO input pin
-//  pinMode(45, OUTPUT);
-//  digitalWrite(45, LOW); 
+  pinMode(CONTACT_INDICATOR_PIN, OUTPUT);   // Setup up GPIO output pin
+  pinMode(HVIL_READ_PIN, INPUT_PULLUP);            // Setup up GPIO input pin
+  pinMode(45, OUTPUT);
+  digitalWrite(45, LOW); 
 
-  for (int i = 0; i < 5; i++){
+  for (int i = 0; i < 4; i++){    // Sets up the double linked list of tasks
     TCB* task = taskArray[i];
     TCB* nextTask = taskArray[i+1];
     task->next = nextTask;
@@ -280,8 +283,9 @@ static void schedulerFunction(void* arg){
   dataScheduler* localDataPtr = (dataScheduler* ) arg;
  
   TCB* taskNode = localDataPtr->firstNode;
-  while(taskNode != NULL){
-    taskNode->myTask((taskNode->taskDataPtr));
+  while(taskNode != NULL){          
+    taskNode->myTask((taskNode->taskDataPtr));    // Iterate through each node in the doubly linkedlist and call the respective task function
+//    samplePress(localDataPtr);
     taskNode = taskNode->next;
   }
 }
@@ -291,7 +295,6 @@ void intraSystemCommFunction(void* arg){
   dataiSC* localDataPtr = (dataiSC* ) arg;
   int dataSize;
   *(localDataPtr->commandPtr) = 0x00;
-  Serial.println(*(localDataPtr->commandPtr));
   Serial1.write(*(localDataPtr->commandPtr));
   if (*(localDataPtr->commandPtr) == 0) {
     // Receiving currentHV and voltageHV data
@@ -304,28 +307,25 @@ void intraSystemCommFunction(void* arg){
   while (Serial1.available()) {
     int charactersRead = Serial1.readBytesUntil('\r', receivedData, dataSize);
   }
-  for(int i =0; i< dataSize; i++){
-      Serial.println(receivedData[i]);
-  }
   uint16_t current = (receivedData[0]) | ((uint16_t)receivedData[1] << 2);
   uint16_t volt = (receivedData[2]) | ((uint16_t)receivedData[3] << 2);
   
   *localDataPtr->voltageHVPtr = (volt / 1024.0) * 450;     // Converting according to voltage range
-  *localDataPtr->currentHVPtr = (current / 1024.0) * 10 - 25;    // Converting according to current range
-  Serial.println(current);
-  Serial.println(volt);
+  *localDataPtr->currentHVPtr = (current / 1024.0) * 50.0 - 25;    // Converting according to current range
+  Serial.println(*localDataPtr->currentHVPtr);
+  Serial.println(*localDataPtr->voltageHVPtr);
   Serial.println();
 }
 
 // TFT display + keypad task that is capable of displaying one of the three screens (measurement, alarm, batteryon/off) at a time
 void tftFunction(void* arg){
   screenPressed = 0;
-//  Serial.print("After: ");
-//  Serial.println(screenPressed);
   dataTft* localDataPtr = (dataTft* )arg;
   int state = *localDataPtr->screenPtr;
-  //samplePress(localDataPtr);
   int firstTime = *localDataPtr->firstTimeScreenPtr;
+//  if(*localDataPtr->switchToAlarmPtr == true){
+//    state = ALARM_SCREEN;
+//  }
   if(state == MEASUREMENT_SCREEN){  // Code to display the measurement screen
     if(firstTime){                  // Wipes the previous screens content when transtioning to a new screen. Each screen code block contains this if check
       tft.fillRect(0,0,240, 250, BLACK);
@@ -356,7 +356,7 @@ void tftFunction(void* arg){
       tft.setTextSize(MEASURE_TEXT_SIZE);
       tft.print("HVIL Status: ");
     }
-    samplePress(localDataPtr);
+    samplePress(localDataPtr);    // Updates the measurement screen values
     tft.setCursor(190, MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->socPtr));
   
@@ -377,8 +377,10 @@ void tftFunction(void* arg){
   
     tft.setCursor(150, 7*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->hvilInputStatePtr));
+    samplePress(localDataPtr);
   }else if (state == ALARM_SCREEN){   // Code for displaying Alarm Screen
     if(firstTime){   
+      Serial.println("ALARM FIRST TIME");
       tft.fillRect(0,0,240, 250, BLACK);
       *localDataPtr->firstTimeScreenPtr = false;
       tft.setCursor(20,0);    // Displays Alarm header
@@ -386,26 +388,41 @@ void tftFunction(void* arg){
       tft.setTextSize(3);
       tft.print("Alarm");
 
-      tft.setCursor(0, MEASURE_Y_SPACING);    // Displays HVI Alarm data
+      tft.setCursor(0, 2*MEASURE_Y_SPACING);    // Displays HVI Alarm data
       tft.setTextSize(MEASURE_TEXT_SIZE);
-      tft.print("HVIAlarm: ");
+      tft.print("HVILAlarm: ");
 
-      tft.setCursor(0, 3*MEASURE_Y_SPACING);   // Displays Overcurrent data
+      tft.setCursor(0, 4*MEASURE_Y_SPACING);   // Displays Overcurrent data
       tft.print("Overcurrent: ");
 
-      tft.setCursor(0, 5*MEASURE_Y_SPACING);  // Displays HV out of range data
+      tft.setCursor(0, 6*MEASURE_Y_SPACING);  // Displays HV out of range data
       tft.print("HVOutofRange: ");
+
       
+      if(*localDataPtr->alarmsAcknowledgedPtr == false){
+        tft.setCursor(0, 0.8*MEASURE_Y_SPACING);    // Displays HVI Alarm data
+        tft.setTextSize(MEASURE_TEXT_SIZE);
+        tft.setTextColor(RED, BLACK);
+        tft.print("ACK change with     white button!");
+        //tft.print("Press ACK button to acknowledge all     Alarm state changes");
+        tft.fillRect(50, 7.25*MEASURE_Y_SPACING, 133, 30, RED);
+        tft.setCursor(105, 7.5*MEASURE_Y_SPACING);
+        tft.setTextColor(WHITE, RED);
+        tft.print("ACK");
+      }      
     }
-    samplePress(localDataPtr);
-    tft.setCursor(0, 1.5*MEASURE_Y_SPACING);
+    tft.setTextColor(WHITE, BLACK);
+    samplePress(localDataPtr);    // Updates the alarm screen values
+    tft.setCursor(0, 2.5*MEASURE_Y_SPACING);
     tft.print(*localDataPtr->hvilPtr);
 
-    tft.setCursor(0, 3.5*MEASURE_Y_SPACING);
+    tft.setCursor(0, 4.5*MEASURE_Y_SPACING);
     tft.print(*localDataPtr->ocurrPtr);
     
-    tft.setCursor(0, 5.5*MEASURE_Y_SPACING);
+    tft.setCursor(0, 6.5*MEASURE_Y_SPACING);
     tft.print(*localDataPtr->hvorPtr); 
+    samplePress(localDataPtr);
+    Serial.println(*localDataPtr->alarmsAcknowledgedPtr);
     
   } else if (state == BATTERY_SCREEN){    // Displays battery screen
       tft.setCursor(40,0);
@@ -437,7 +454,6 @@ void tftFunction(void* arg){
 
 // Helper function that takes in touch pressure coordinates and determines whether or not the stylus actually touched a button
 static void samplePress(void* arg){
-
   dataTft* sampDataPtr = (dataTft* )arg;
   digitalWrite(13, HIGH); // Lines that we need to get a touch coordinate
   p = ts.getPoint();
@@ -478,6 +494,11 @@ static void samplePress(void* arg){
         Serial.println("Battery turned off");
       }
       screenPressed = 1;
+    }else if (p.y < 252 && p.y > 222 && p.x > 55 && p.x < 180){
+      *sampDataPtr->alarmsAcknowledgedPtr = true;
+      *sampDataPtr->switchToAlarmPtr = false;
+      *sampDataPtr->firstTimeScreenPtr = true;
+      Serial.println("ACK TOUCHED");
     }
   }
 }
@@ -489,7 +510,7 @@ static void measureFunction(void* arg){
   *localDataPtr->isolResHVPtr = 0;
   *localDataPtr->modeHVPtr = "0";
   
-  if (digitalRead(HVIL_READ_PIN)){    // Handles HVIL status data
+  if (digitalRead(HVIL_ISR_PIN)){    // Handles HVIL status data
     *(localDataPtr->hvilInputStatePtr) = "OPEN  ";
   } else{
     *(localDataPtr->hvilInputStatePtr) = "CLOSED";
@@ -508,13 +529,19 @@ static void socFunction(void* arg){
 static void contactFunction(void * arg){  
   dataContact* localDataPtr = (dataContact* ) arg;
   // If Battery turn On button is pressed, we close the contactors
-  if(*(localDataPtr->control) && *(localDataPtr->STATE_HVIL_ISR) == "NOT_ACTIVE"){ 
+  if(*(localDataPtr->control) && *(localDataPtr->hvilPtr) == "NOT_ACTIVE             "){ 
     *(localDataPtr->state) = "CLOSED";
     digitalWrite(CONTACT_INDICATOR_PIN, HIGH);
+    Serial.println("LIGHT ON");
   } else{
     *(localDataPtr->state) = "OPEN  ";
     digitalWrite(CONTACT_INDICATOR_PIN, LOW);
+    Serial.println("OFF");
   }
+  if(*(localDataPtr->control)){
+      Serial.println("FOSK");
+  }
+//  Serial.println(*(localDataPtr->hvilPtr));
 }
 
 // Alarm task that determines and cycles the alarm dummy values to be displayed 
@@ -524,35 +551,44 @@ void alarmFunction(void * arg){
   // Takes care of HVIL/HVIL Interrupt alarm data
   if ((*localDataPtr->hvilInputStatePtr) == "CLOSED"){   
     *(localDataPtr->hvilPtr) = "NOT_ACTIVE             ";
-    *(localDataPtr->HVIL_ISR_STATE_PTR) = "NOT_ACTIVE             ";
-  } else if ((*localDataPtr->hvilInputStatePtr) == "OPEN  " && localDataPtr->alarmsAcknowledgedPtr == true){
+  } else if ((*localDataPtr->hvilInputStatePtr) == "OPEN  " && (*localDataPtr->alarmsAcknowledgedPtr) == true){
     *(localDataPtr->hvilPtr) = "ACTIVE_ACKNOWLEDGED    ";
-    *(localDataPtr->HVIL_ISR_STATE_PTR) = "ACTIVE_ACKNOWLEDGED    ";
   } else { 
     *(localDataPtr->hvilPtr) = "ACTIVE_NOT_ACKNOWLEDGED";
+    (*localDataPtr->alarmsAcknowledgedPtr) = false;
   }
 
   // Takes care of overcurrent data
-  if ((*localDataPtr->currentHVPtr) < 20 && (*localDataPtr->currentHVPtr) > -5){   
+  if ((*localDataPtr->currentHVPtr) < 20.0 && (*localDataPtr->currentHVPtr) > -5.0){   
     *(localDataPtr->ocurrPtr) = "NOT_ACTIVE             ";
-  } else if ((*localDataPtr->currentHVPtr) <= -5 || (*localDataPtr->currentHVPtr) >= 20 && localDataPtr->alarmsAcknowledgedPtr == true){
+  } else if(((((*localDataPtr->currentHVPtr) <= -5.0 || (*localDataPtr->currentHVPtr) >= 20.0))) && (((*localDataPtr->alarmsAcknowledgedPtr) == true &&  *(localDataPtr->ocurrPtr) == "ACTIVE_NOT_ACKNOWLEDGED") || (*(localDataPtr->ocurrPtr) == "ACTIVE_ACKNOWLEDGED    "))){ 
     *(localDataPtr->ocurrPtr) = "ACTIVE_ACKNOWLEDGED    ";
   } else {
     *(localDataPtr->ocurrPtr) = "ACTIVE_NOT_ACKNOWLEDGED"; 
+    (*localDataPtr->alarmsAcknowledgedPtr) = false;
   }
-
+  
   // Takes care of HV out of range data
-  if ((*localDataPtr->voltageHVPtr) < 405 && (*localDataPtr->voltageHVPtr) > 280){   
+  if ((*localDataPtr->voltageHVPtr) < 405.0 && (*localDataPtr->voltageHVPtr) > 280.0){   
     *(localDataPtr->hvorPtr) = "NOT_ACTIVE             ";
-  } else if ((*localDataPtr->voltageHVPtr) <= 280 || (*localDataPtr->voltageHVPtr) >= 405 && localDataPtr->alarmsAcknowledgedPtr == true){ 
+  } else if (((((*localDataPtr->voltageHVPtr) <= 280.0 || (*localDataPtr->voltageHVPtr) >= 405.0))) && (((*localDataPtr->alarmsAcknowledgedPtr) == true &&  *(localDataPtr->hvorPtr) == "ACTIVE_NOT_ACKNOWLEDGED") || (*(localDataPtr->hvorPtr) == "ACTIVE_ACKNOWLEDGED    "))){ 
     *(localDataPtr->hvorPtr) = "ACTIVE_ACKNOWLEDGED    ";
   } else {
     *(localDataPtr->hvorPtr) = "ACTIVE_NOT_ACKNOWLEDGED";
+    (*localDataPtr->alarmsAcknowledgedPtr) = false;
   }
 
-  //Serial.println(*(localDataPtr->hvorPtr));
-  //alarmCntr++; 
-
+  if ((*(localDataPtr->hvorPtr) == "ACTIVE_NOT_ACKNOWLEDGED") || (*(localDataPtr->ocurrPtr) == "ACTIVE_NOT_ACKNOWLEDGED") || (*(localDataPtr->hvilPtr) == "ACTIVE_NOT_ACKNOWLEDGED")){
+    *(localDataPtr->switchToAlarmPtr) = true;
+    if(*localDataPtr->screenPtr != ALARM_SCREEN || *(localDataPtr->alarmsAcknowledgedPtr) == true){
+      *localDataPtr->firstTimeScreenPtr = true;
+    } else{
+      *localDataPtr->firstTimeScreenPtr = false;
+    }
+    *(localDataPtr->screenPtr) = ALARM_SCREEN;
+  }else{
+    *(localDataPtr->switchToAlarmPtr) = false;
+  }  
 }
 
 // Helper function that initializes the myTaskDataPtr members to their respective TCB task structs and initializes members to the addresses of the different global variables used
@@ -565,10 +601,13 @@ void initializeStructs(){
   alarmData.voltageHVPtr = &voltageHV;
   alarmData.hvilPtr = &hvilState;
   alarmData.HVIL_ISR_STATE_PTR = &HVIL_ISR_STATE;
-  alarmData.hvilInputStatePtr = &hvilInputState;
+  alarmData.hvilInputStatePtr = &HVIL_ISR_STATE;
   alarmData.ocurrPtr = &ocurrState;
   alarmData.hvorPtr = &hvorState;
   alarmData.alarmsAcknowledgedPtr = &alarmsAcknowledged;
+  alarmData.switchToAlarmPtr = &switchToAlarm;
+  alarmData.firstTimeScreenPtr = &firstTimeScreen;
+  alarmData.screenPtr = &screenDisplay;
   alarmTask.next = NULL;
   alarmTask.prev = NULL;
 
@@ -578,7 +617,8 @@ void initializeStructs(){
   contactTask.taskDataPtr = &contactData;
   contactData.state = &contactState;
   contactData.control = &batteryTurnON;
-  contactData.STATE_HVIL_ISR = &HVIL_ISR_STATE;
+  contactData.STATE_HVIL_ISR = &HVIL_ISR_STATE;   
+  contactData.hvilPtr = &hvilState;
   contactTask.next = NULL;
   contactTask.prev = NULL;
 
@@ -609,7 +649,7 @@ void initializeStructs(){
   measureData.voltageHVPtr = &voltageHV;
   measureData.isolResHVPtr = &isolResHV;
   measureData.modeHVPtr = &modeHV;
-  measureData.hvilInputStatePtr = &hvilInputState;
+  measureData.hvilInputStatePtr = &HVIL_ISR_STATE;
   measureData.dataiSCPtr = &iSCData;
   measureData.alarmsAcknowledgedPtr = &alarmsAcknowledged;
   measureTask.next = NULL;
@@ -625,7 +665,7 @@ void initializeStructs(){
   tftData.voltageHVPtr = &voltageHV;
   tftData.isolResHVPtr = &isolResHV;
   tftData.modeHVPtr = &modeHV;
-  tftData.hvilInputStatePtr = &hvilInputState;
+  tftData.hvilInputStatePtr = &HVIL_ISR_STATE;
   tftData.hvilPtr = &hvilState;
   tftData.ocurrPtr = &ocurrState;
   tftData.hvorPtr = &hvorState;
@@ -633,6 +673,7 @@ void initializeStructs(){
   tftData.firstTimeScreenPtr = &firstTimeScreen;
   tftData.controlPtr = &batteryTurnON;
   tftData.alarmsAcknowledgedPtr = &alarmsAcknowledged;
+  tftData.switchToAlarmPtr = &switchToAlarm;
   tftTask.next = NULL;
   tftTask.prev = NULL;
 
@@ -642,6 +683,7 @@ void initializeStructs(){
   schedulerTask.taskDataPtr = &schedulerData;
   schedulerData.pointerToTCBArray = &taskArray;
   schedulerData.firstNode = &measureTask;
+  schedulerData.dataTftPtr = &tftData;
   schedulerTask.next = NULL;
   schedulerTask.prev = NULL;
 
@@ -665,7 +707,9 @@ void timerISR(){
 // Action: set HVIL interrupt alarm to "ACTIVE, NOT ACKNOWLEDGED"
 //         open contactors by toggling gpio directly
 void hvilISR() {
-  HVIL_ISR_STATE = "ACTIVE_NOT_ACKNOWLEDGED";
-  contactState = "OPEN";
+  HVIL_ISR_STATE = "OPEN  ";
+  alarmsAcknowledged = false;
+  batteryTurnON = false;
+  firstTimeScreen = true;
   digitalWrite(CONTACT_INDICATOR_PIN, LOW);
 }
