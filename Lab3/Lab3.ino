@@ -312,9 +312,8 @@ void intraSystemCommFunction(void* arg){
   
   *localDataPtr->voltageHVPtr = (volt / 1024.0) * 450;     // Converting according to voltage range
   *localDataPtr->currentHVPtr = (current / 1024.0) * 50.0 - 25;    // Converting according to current range
-  Serial.println(*localDataPtr->currentHVPtr);
-  Serial.println(*localDataPtr->voltageHVPtr);
-  Serial.println();
+  Serial.println( *localDataPtr->voltageHVPtr);
+  Serial.println( *localDataPtr->currentHVPtr);
 }
 
 // TFT display + keypad task that is capable of displaying one of the three screens (measurement, alarm, batteryon/off) at a time
@@ -365,7 +364,7 @@ void tftFunction(void* arg){
    
     tft.setCursor(135, 3*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->currentHVPtr));
-  
+    samplePress(localDataPtr); 
     tft.setCursor(135, 4*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->voltageHVPtr));
   
@@ -380,7 +379,6 @@ void tftFunction(void* arg){
     samplePress(localDataPtr);
   }else if (state == ALARM_SCREEN){   // Code for displaying Alarm Screen
     if(firstTime){   
-      Serial.println("ALARM FIRST TIME");
       tft.fillRect(0,0,240, 250, BLACK);
       *localDataPtr->firstTimeScreenPtr = false;
       tft.setCursor(20,0);    // Displays Alarm header
@@ -391,7 +389,7 @@ void tftFunction(void* arg){
       tft.setCursor(0, 2*MEASURE_Y_SPACING);    // Displays HVI Alarm data
       tft.setTextSize(MEASURE_TEXT_SIZE);
       tft.print("HVILAlarm: ");
-
+      samplePress(localDataPtr); 
       tft.setCursor(0, 4*MEASURE_Y_SPACING);   // Displays Overcurrent data
       tft.print("Overcurrent: ");
 
@@ -418,11 +416,10 @@ void tftFunction(void* arg){
 
     tft.setCursor(0, 4.5*MEASURE_Y_SPACING);
     tft.print(*localDataPtr->ocurrPtr);
-    
+    samplePress(localDataPtr); 
     tft.setCursor(0, 6.5*MEASURE_Y_SPACING);
     tft.print(*localDataPtr->hvorPtr); 
     samplePress(localDataPtr);
-    Serial.println(*localDataPtr->alarmsAcknowledgedPtr);
     
   } else if (state == BATTERY_SCREEN){    // Displays battery screen
       tft.setCursor(40,0);
@@ -488,17 +485,14 @@ static void samplePress(void* arg){
     } else if (p.y > 45 && p.y < 185 && p.x > 55 && p.x < 180){   // If the contactor buttons were pressed
       if (p.y < 115) {
         *sampDataPtr->controlPtr = true;
-        Serial.println("Battery turned on");
       } else {
         *sampDataPtr->controlPtr = false;
-        Serial.println("Battery turned off");
       }
       screenPressed = 1;
     }else if (p.y < 252 && p.y > 222 && p.x > 55 && p.x < 180){
       *sampDataPtr->alarmsAcknowledgedPtr = true;
       *sampDataPtr->switchToAlarmPtr = false;
       *sampDataPtr->firstTimeScreenPtr = true;
-      Serial.println("ACK TOUCHED");
     }
   }
 }
@@ -532,11 +526,9 @@ static void contactFunction(void * arg){
   if(*(localDataPtr->control) && *(localDataPtr->hvilPtr) == "NOT_ACTIVE             "){ 
     *(localDataPtr->state) = "CLOSED";
     digitalWrite(CONTACT_INDICATOR_PIN, HIGH);
-    Serial.println("LIGHT ON");
   } else{
     *(localDataPtr->state) = "OPEN  ";
     digitalWrite(CONTACT_INDICATOR_PIN, LOW);
-    Serial.println("OFF");
   }
 }
 
