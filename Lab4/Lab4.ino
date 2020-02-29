@@ -169,6 +169,12 @@ struct schedulerStruct{
 
 struct startupStruct{
   TCB* (*pointerToTCBArray)[4];
+  double* maxCurrentHVPtr;
+  double* maxVoltageHVPtr;
+  int* maxSOCPtr;
+  double* minCurrentHVPtr;
+  double* minVoltageHVPtr;
+  int* minSOCPtr;
 }; typedef struct startupStruct dataStartup;
 
 struct iSCStruct{
@@ -346,7 +352,15 @@ static void startupFunction(void* arg){
   }
   taskArray[0]->prev = NULL;
   taskArray[3]->next = NULL; 
-  
+
+  // Initialize min/max voltage, current, and SOC values
+  EEPROM.get(MAX_VOLT_ADDR, *localDataPtr->maxVoltageHVPtr);
+  EEPROM.get(MIN_VOLT_ADDR, *localDataPtr->minVoltageHVPtr);
+  EEPROM.get(MAX_CURR_ADDR, *localDataPtr->maxCurrentHVPtr);
+  EEPROM.get(MIN_CURR_ADDR, *localDataPtr->minCurrentHVPtr);
+  EEPROM.get(MAX_SOC_ADDR, *localDataPtr->maxSOCPtr);
+  EEPROM.get(MIN_SOC_ADDR, *localDataPtr->minSOCPtr);
+ 
   Serial.println("Finish startup");
 }
 
@@ -991,6 +1005,12 @@ void initializeStructs(){
   dataStartup startupData;
   startupTask.taskDataPtr = &startupData;
   startupData.pointerToTCBArray = &taskArray;
+  startupData.maxCurrentHVPtr = &maxCurrentHV;
+  startupData.maxVoltageHVPtr = &maxVoltageHV;
+  startupData.maxSOCPtr = &maxSOC;
+  startupData.minCurrentHVPtr = &minCurrentHV;
+  startupData.minVoltageHVPtr = &minVoltageHV;
+  startupData.minSOCPtr = &minSOC;
   startupTask.next = NULL;
   startupTask.prev = NULL;
   Serial.println("Finish Initializing Structs");
