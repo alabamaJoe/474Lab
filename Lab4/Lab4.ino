@@ -103,6 +103,7 @@ static bool switchToAlarm = false;
 static int temp;  // Variables needed for measurement
 volatile static double currentHV;   // Stores HV current data
 volatile static double voltageHV;   // Stores HV voltage data
+volatile static double temperatureHV; // Stores HV temperature data
 volatile static double maxCurrentHV;
 volatile static double minCurrentHV;
 volatile static double maxVoltageHV;
@@ -136,6 +137,8 @@ struct contactStruct{
   String *STATE_HVIL_ISR;
   bool *control;
   String *hvilPtr;
+  String* ocurrPtr;
+  String* hvorPtr;
 }; typedef struct contactStruct dataContact;
 
 struct socStruct{
@@ -784,18 +787,32 @@ static void measureFunction(void* arg){                                 // 10Hz
   }
 }
 
-// SOC task that sets up the SOC dummy value to be displayed    10hz
+// SOC task that calculates the vlaue based on temperature, terminal voltage,
+// current and internal battery resistance. Operatres at 10hz
 static void socFunction(void* arg){
-  // SOC is const 0 for now. Global variable 'soc' is set to zero
+  int voc = 0.5*currentHV + voltageHV;   // Stores HV current data
+  int socValue;
+  if (voc == 200 || voc == 400) {
+    socValue = 0;
+  } else if (temperatureHV == -10){
+    socValue = (1/125)*(voc*voc)-(39/10)*voc+485;
+  } else if (temperatureHV == 0) {
+    socValue = (1/125)*(voc*voc)-4*voc+500;
+  }else if (temperatureHV == 25) {
+    socValue = (1/125)*(voc*voc)-(21/5)*voc+550;
+  } else { // temperatureHV == 45
+    socValue = (1/100)*(voc*voc)-(11/2)*voc+750;
+  }
   dataSOC* localDataPtr = (dataSOC* ) arg;
-  *(localDataPtr->socPtr) = 0;
+  *(localDataPtr->socPtr) = (int)socValue;
 }
 
 // Contacter task that applies contactor state diagram    10hz
 static void contactFunction(void * arg){  
   dataContact* localDataPtr = (dataContact* ) arg;
   // If Battery turn On button is pressed, we close the contactors
-  if(*(localDataPtr->control) && *(localDataPtr->hvilPtr) == "NOT_ACTIVE             "){ 
+  if(*(localDataPtr->control) && *(localDataPtr->hvilPtr) == "NOT_ACTIVE             " 
+    && *(localDataPtr->ocurrPtr) == "NOT_ACTIVE             " && *(localDataPtr->hvorPtr) == "NOT_ACTIVE             "){ 
     *(localDataPtr->state) = "CLOSED";
     digitalWrite(CONTACT_INDICATOR_PIN, HIGH);
   } else{
@@ -916,6 +933,8 @@ void initializeStructs(){
   contactData.control = &batteryTurnON;
   contactData.STATE_HVIL_ISR = &HVIL_ISR_STATE;   
   contactData.hvilPtr = &hvilState;
+  contactData.ocurrPtr = &ocurrState;
+  contactData.hvorPtr = &hvorState;
   contactTask.next = NULL;
   contactTask.prev = NULL;
 
