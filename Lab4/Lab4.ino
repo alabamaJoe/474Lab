@@ -48,7 +48,7 @@
 #define XP 8   // can be a digital pin
 
 // Pressure touchscreen parameters
-#define MINPRESSURE 30
+#define MINPRESSURE 50
 #define MAXPRESSURE 1000
 
 //Different Screens for TFT
@@ -362,12 +362,13 @@ static void startupFunction(void* arg){
 
   // Initialize min/max voltage, current, and SOC values
   EEPROM.get(MAX_VOLT_ADDR, *localDataPtr->maxVoltageHVPtr);
-  Serial.println(*localDataPtr->maxVoltageHVPtr);
   EEPROM.get(MIN_VOLT_ADDR, *localDataPtr->minVoltageHVPtr);
-//  EEPROM.get(MAX_CURR_ADDR, *localDataPtr->maxCurrentHVPtr);
-//  EEPROM.get(MIN_CURR_ADDR, *localDataPtr->minCurrentHVPtr);
-//  EEPROM.get(MAX_SOC_ADDR, *localDataPtr->maxSOCPtr);
-//  EEPROM.get(MIN_SOC_ADDR, *localDataPtr->minSOCPtr);
+  Serial.println( *localDataPtr->minVoltageHVPtr);
+  EEPROM.get(MAX_CURR_ADDR, *localDataPtr->maxCurrentHVPtr);
+  EEPROM.get(MIN_CURR_ADDR, *localDataPtr->minCurrentHVPtr);
+  Serial.println( *localDataPtr->minCurrentHVPtr);
+  EEPROM.get(MAX_SOC_ADDR, *localDataPtr->maxSOCPtr);
+  EEPROM.get(MIN_SOC_ADDR, *localDataPtr->minSOCPtr);
  
   Serial.println("Finish startup");
 }
@@ -495,7 +496,6 @@ static void loggingFunction(void* arg){
     *localDataPtr->minVoltageHVPtr = -1.0f;
     *localDataPtr->minSOCPtr = -1.0f;
     *localDataPtr->maxSOCPtr = -1.0f;
-
     EEPROM.put(address, -1.0f);    // EEPROM max volt
     address += sizeof(*localDataPtr->maxVoltageHVPtr);
     EEPROM.put(address, -1.0f);    // EEPROM min volt
@@ -515,19 +515,23 @@ static void loggingFunction(void* arg){
     if (*localDataPtr->maxVoltChangePtr){
       EEPROM.put(MAX_VOLT_ADDR, *localDataPtr->maxVoltageHVPtr);    // EEPROM max volt
       *localDataPtr->maxVoltChangePtr = false;
-    } else if (*localDataPtr->minVoltChangePtr){
+    }if (*localDataPtr->minVoltChangePtr){
       EEPROM.put(MIN_VOLT_ADDR, *localDataPtr->minVoltageHVPtr);    // EEPROM min volt
       *localDataPtr->minVoltChangePtr = false;
-    } else if (*localDataPtr->maxCurrChangePtr){
+    } 
+    if (*localDataPtr->maxCurrChangePtr){
       EEPROM.put(MAX_CURR_ADDR, *localDataPtr->maxCurrentHVPtr);    // EEPROM max current
       *localDataPtr->maxCurrChangePtr = false;
-    } else if (*localDataPtr->minCurrChangePtr){
+    } 
+    if (*localDataPtr->minCurrChangePtr){
       EEPROM.put(MIN_CURR_ADDR, *localDataPtr->minCurrentHVPtr);    // EEPROM min current
       *localDataPtr->minCurrChangePtr = false;
-    } else if (*localDataPtr->maxSOCChangePtr){
+    } 
+    if (*localDataPtr->maxSOCChangePtr){
       EEPROM.put(MAX_SOC_ADDR, *localDataPtr->maxSOCPtr);          // EEPROM max SOC
       *localDataPtr->maxSOCChangePtr = false;
-    } else if (*localDataPtr->minSOCChangePtr){
+    } 
+    if (*localDataPtr->minSOCChangePtr){
       EEPROM.put(MIN_SOC_ADDR, *localDataPtr->minSOCPtr);         // EEPROM min SOC
       *localDataPtr->minSOCChangePtr = false;
     }
@@ -566,9 +570,6 @@ void tftFunction(void* arg){
   dataTft* localDataPtr = (dataTft* )arg;
   int state = *localDataPtr->screenPtr;
   int firstTime = *localDataPtr->firstTimeScreenPtr;
-//  if(*localDataPtr->switchToAlarmPtr == true){
-//    state = ALARM_SCREEN;
-//  }
   if(state == MEASUREMENT_SCREEN){  // Code to display the measurement screen
     if(firstTime){                  // Wipes the previous screens content when transtioning to a new screen. Each screen code block contains this if check
       tft.fillRect(0,0,240, 250, BLACK);
@@ -750,7 +751,7 @@ static void measureFunction(void* arg){                                 // 10Hz
   
   intraSystemCommFunction(localDataPtr->dataiSCPtr);    // Calls the intra-system comm task to obtain current and voltage Uart data
 
-  if ((millis() - getTime >= 5000) && refresh){
+  if ((millis() - getTime >= 6000) && refresh){
     *localDataPtr->maxVoltageHVPtr = *localDataPtr->voltageHVPtr;
     *localDataPtr->minVoltageHVPtr = *localDataPtr->voltageHVPtr;
     *localDataPtr->maxCurrentHVPtr = *localDataPtr->currentHVPtr;
@@ -760,7 +761,7 @@ static void measureFunction(void* arg){                                 // 10Hz
     refresh = false;
   }
   
-  if ((*localDataPtr->voltageHVPtr != *localDataPtr->maxVoltageHVPtr || *localDataPtr->voltageHVPtr != *localDataPtr->minVoltageHVPtr) && (millis()-getTime >= 5000)){
+  if ((*localDataPtr->voltageHVPtr != *localDataPtr->maxVoltageHVPtr || *localDataPtr->voltageHVPtr != *localDataPtr->minVoltageHVPtr) && (millis()-getTime >= 6000)){
     if (*localDataPtr->voltageHVPtr > *localDataPtr->maxVoltageHVPtr){    // Update min and max HV Values
       *localDataPtr->maxVoltageHVPtr = *localDataPtr->voltageHVPtr;
       *localDataPtr->maxVoltChangePtr = true;
@@ -770,7 +771,7 @@ static void measureFunction(void* arg){                                 // 10Hz
     }
   }
 
-  if ((*localDataPtr->currentHVPtr != *localDataPtr->maxCurrentHVPtr || *localDataPtr->currentHVPtr != *localDataPtr->minCurrentHVPtr) && (millis()-getTime >= 5000)){
+  if ((*localDataPtr->currentHVPtr != *localDataPtr->maxCurrentHVPtr || *localDataPtr->currentHVPtr != *localDataPtr->minCurrentHVPtr) && (millis()-getTime >= 6000)){
     if (*localDataPtr->currentHVPtr > *localDataPtr->maxCurrentHVPtr){    // Update min and max Curr Values
       *localDataPtr->maxCurrentHVPtr = *localDataPtr->currentHVPtr;
       *localDataPtr->maxCurrChangePtr = true;
@@ -780,7 +781,7 @@ static void measureFunction(void* arg){                                 // 10Hz
     } 
   }
 
-  if ((*localDataPtr->socHVPtr != *localDataPtr->maxSOCPtr || *localDataPtr->socHVPtr != *localDataPtr->minSOCPtr) && (millis()-getTime >= 5000)){
+  if ((*localDataPtr->socHVPtr != *localDataPtr->maxSOCPtr || *localDataPtr->socHVPtr != *localDataPtr->minSOCPtr) && (millis()-getTime >= 6000)){
     if (*localDataPtr->socHVPtr > *localDataPtr->maxSOCPtr){    // Update min and max SOC Values
       *localDataPtr->maxSOCPtr = *localDataPtr->socHVPtr;
       *localDataPtr->maxSOCChangePtr = true;
@@ -814,7 +815,8 @@ static void socFunction(void* arg){
   } else if (temperatureHV == -10){
     socValue = 1/30000.0*(voc*voc*voc) - 11/500.0*voc*voc + 301.0/60*voc - 390.0;
   } else if (temperatureHV == 0) {
-    socValue = 2.0/1171875*(voc*voc*voc*voc) - 109.0/46875*(voc*voc*voc) + 2203.0/1875*(voc*voc) - 19496.0/75*voc + 21220.0;
+//    socValue = 2.0/1171875*(voc*voc*voc*voc) - 109.0/46875*(voc*voc*voc) + 2203.0/1875*(voc*voc) - 19496.0/75*voc + 21220.0;
+    socValue = ((voc-200)*(45-temperatureHV)/((200)*(55)))*100 + ((voc-200)*(temperatureHV+10)/((200)*(55)))*100;
   }else if (temperatureHV == 25) {
     socValue = -1/15000.0*(voc*voc*voc) + 17/250.0*voc*voc - 661.0/30*voc + 2300.0;
   } else { // temperatureHV == 45
@@ -863,7 +865,7 @@ void alarmFunction(void * arg){
   } else if(((((*localDataPtr->currentHVPtr) <= -5.0 || (*localDataPtr->currentHVPtr) >= 20.0))) && (((*localDataPtr->alarmsAcknowledgedPtr) == true &&  *(localDataPtr->ocurrPtr) == "ACTIVE_NOT_ACKNOWLEDGED") || (*(localDataPtr->ocurrPtr) == "ACTIVE_ACKNOWLEDGED    "))){ 
     *(localDataPtr->ocurrPtr) = "ACTIVE_ACKNOWLEDGED    ";
   } else {
-    if(*(localDataPtr->hvorPtr) == "NOT_ACTIVE             "){
+    if(*(localDataPtr->ocurrPtr) == "NOT_ACTIVE             "){
       *localDataPtr->firstTimeScreenPtr = true;
     }
     *(localDataPtr->ocurrPtr) = "ACTIVE_NOT_ACKNOWLEDGED"; 
@@ -890,7 +892,9 @@ void alarmFunction(void * arg){
     } else{
 //      *localDataPtr->firstTimeScreenPtr = false;
     }
-    *(localDataPtr->screenPtr) = ALARM_SCREEN;
+    if (millis() > 2000){
+      *(localDataPtr->screenPtr) = ALARM_SCREEN;
+    }
   }else{
     *(localDataPtr->switchToAlarmPtr) = false;
   }  
