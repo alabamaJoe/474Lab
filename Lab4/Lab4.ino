@@ -89,11 +89,11 @@ static long waitTime;
 
 static int screenDisplay = MEASUREMENT_SCREEN;  // Variable that determines which screen to show during TFT task
 
-volatile String HVIL_ISR_STATE;
+volatile String HVIL_ISR_STATE = "CLOSED";
 String hvilState = "NOT_ACTIVE             "; 
 String ocurrState = "NOT_ACTIVE             ";
 static String hvorState = "NOT_ACTIVE             ";
-static int soc = 0;   // SOC value, for now is just zero
+static float soc = 0;   // SOC value, for now is just zero
 //int alarmCntr = 0;    // Counters to help determine which dummy value to output
 static int socCntr = 0;
 static int measureCntr = 0;
@@ -101,16 +101,16 @@ static int screenPressed = 0;
 static bool switchToAlarm = false;
 
 static int temp;  // Variables needed for measurement
-volatile static double currentHV;   // Stores HV current data
-volatile static double voltageHV;   // Stores HV voltage data
-volatile static double temperatureHV; // Stores HV temperature data
-volatile static double maxCurrentHV;
-volatile static double minCurrentHV;
-volatile static double maxVoltageHV;
-volatile static double minVoltageHV;
-volatile static int maxSOC;
-volatile static int minSOC;
-volatile static int taskCounter = 0;
+volatile static float currentHV;   // Stores HV current data
+volatile static float voltageHV;   // Stores HV voltage data
+volatile static float temperatureHV; // Stores HV temperature data
+volatile static float maxCurrentHV = -20.0f;
+volatile static float minCurrentHV = 20.0f;
+volatile static float maxVoltageHV = 0.0f;
+volatile static float minVoltageHV = 450.0f;
+volatile static float maxSOC = 0.0f;
+volatile static float minSOC = 100.0f;
+volatile int taskCounter = 0;
 
 volatile static byte command;  // Command to specify which data is desired
 static long isolResHV;
@@ -119,8 +119,8 @@ bool firstTerminalPrint = true;
 
 /////////////////// taskDataPtr instantiations for each task ///////////////
 struct alarmStruct{
-  double* currentHVPtr;
-  double* voltageHVPtr;
+  float* currentHVPtr;
+  float* voltageHVPtr;
   String* hvilPtr;
   String* HVIL_ISR_STATE_PTR;
   String* ocurrPtr;
@@ -142,14 +142,14 @@ struct contactStruct{
 }; typedef struct contactStruct dataContact;
 
 struct socStruct{
-  int* socPtr;
+  float* socPtr;
 }; typedef struct socStruct dataSOC;
 
 struct tftStruct{
-  int* socPtr;    // Measurement screen variables
+  float* socPtr;    // Measurement screen variables
   int* tempPtr;
-  double* currentHVPtr;
-  double* voltageHVPtr;
+  float* currentHVPtr;
+  float* voltageHVPtr;
   long* isolResHVPtr;
   String* modeHVPtr;
   String* hvilInputStatePtr;
@@ -172,24 +172,24 @@ struct schedulerStruct{
 
 struct startupStruct{
   TCB* (*pointerToTCBArray)[4];
-  double* maxCurrentHVPtr;
-  double* maxVoltageHVPtr;
-  int* maxSOCPtr;
-  double* minCurrentHVPtr;
-  double* minVoltageHVPtr;
-  int* minSOCPtr;
+  float* maxCurrentHVPtr;
+  float* maxVoltageHVPtr;
+  float* maxSOCPtr;
+  float* minCurrentHVPtr;
+  float* minVoltageHVPtr;
+  float* minSOCPtr;
 }; typedef struct startupStruct dataStartup;
 
 struct iSCStruct{
-  volatile double* voltageHVPtr;
-  volatile double* currentHVPtr;
+  volatile float* voltageHVPtr;
+  volatile float* currentHVPtr;
   byte* commandPtr;
 }; typedef struct iSCStruct dataiSC;
 
 struct measureStruct{
   int* tempPtr;
-  double* currentHVPtr;
-  double* voltageHVPtr;
+  float* currentHVPtr;
+  float* voltageHVPtr;
   int* socHVPtr;
   long* isolResHVPtr;
   String* modeHVPtr;
@@ -197,12 +197,12 @@ struct measureStruct{
   iSCStruct* dataiSCPtr;
   bool* alarmsAcknowledgedPtr;
 
-  double* maxCurrentHVPtr;
-  double* maxVoltageHVPtr;
-  int* maxSOCPtr;
-  double* minCurrentHVPtr;
-  double* minVoltageHVPtr;
-  int* minSOCPtr;
+  float* maxCurrentHVPtr;
+  float* maxVoltageHVPtr;
+  float* maxSOCPtr;
+  float* minCurrentHVPtr;
+  float* minVoltageHVPtr;
+  float* minSOCPtr;
   bool* minVoltChangePtr;
   bool* maxVoltChangePtr;
   bool* minCurrChangePtr;
@@ -213,12 +213,12 @@ struct measureStruct{
 }; typedef struct measureStruct dataMeasure;
 
 struct loggingStruct{
-  double* maxCurrentHVPtr;
-  double* maxVoltageHVPtr;
-  int* maxSOCPtr;
-  double* minCurrentHVPtr;
-  double* minVoltageHVPtr;
-  int* minSOCPtr;
+  float* maxCurrentHVPtr;
+  float* maxVoltageHVPtr;
+  float* maxSOCPtr;
+  float* minCurrentHVPtr;
+  float* minVoltageHVPtr;
+  float* minSOCPtr;
   bool* minVoltChangePtr;
   bool* maxVoltChangePtr;
   bool* minCurrChangePtr;
@@ -230,10 +230,10 @@ struct loggingStruct{
 
 struct terminalStruct{
   int* resetEEPROMPtr;
-  double* maxCurrentHVPtr;
-  double* maxVoltageHVPtr;
-  double* minCurrentHVPtr;
-  double* minVoltageHVPtr;
+  float* maxCurrentHVPtr;
+  float* maxVoltageHVPtr;
+  float* minCurrentHVPtr;
+  float* minVoltageHVPtr;
   bool* firstTerminalPrintPtr;
 }; typedef struct terminalStruct dataTerminal;
 
@@ -244,7 +244,7 @@ static String hvilInputState = "OPEN  ";
 volatile String contactState = "OPEN  ";
 volatile bool batteryTurnON = false;
 volatile bool firstTimeScreen = true;
-volatile bool alarmsAcknowledged = false;
+volatile bool alarmsAcknowledged = true;
 volatile bool minVoltChange = false;
 volatile bool maxVoltChange = false;
 volatile bool minCurrChange = false;
@@ -305,7 +305,7 @@ void setup() {
     Serial.println(F("  #define USE_Elegoo_SHIELD_PINOUT"));
     Serial.println(F("should appear in the library header (Elegoo_TFT.h)."));
     Serial.println(F("If using the breakout board, it should NOT be #defined!"));
-    Serial.println(F("Also if using the breakout, double-check that all wiring"));
+    Serial.println(F("Also if using the breakout, float-check that all wiring"));
     Serial.println(F("matches the tutorial."));
     identifier=0x9328;
   
@@ -347,7 +347,7 @@ static void startupFunction(void* arg){
   pinMode(45, OUTPUT);
   digitalWrite(45, LOW); 
 
-  for (int i = 0; i < 3; i++){    // Sets up the double linked list of tasks
+  for (int i = 0; i < 3; i++){    // Sets up the float linked list of tasks
     TCB* task = taskArray[i];
     TCB* nextTask = taskArray[i+1];
     task->next = nextTask;
@@ -358,11 +358,12 @@ static void startupFunction(void* arg){
 
   // Initialize min/max voltage, current, and SOC values
   EEPROM.get(MAX_VOLT_ADDR, *localDataPtr->maxVoltageHVPtr);
+  Serial.println(*localDataPtr->maxVoltageHVPtr);
   EEPROM.get(MIN_VOLT_ADDR, *localDataPtr->minVoltageHVPtr);
-  EEPROM.get(MAX_CURR_ADDR, *localDataPtr->maxCurrentHVPtr);
-  EEPROM.get(MIN_CURR_ADDR, *localDataPtr->minCurrentHVPtr);
-  EEPROM.get(MAX_SOC_ADDR, *localDataPtr->maxSOCPtr);
-  EEPROM.get(MIN_SOC_ADDR, *localDataPtr->minSOCPtr);
+//  EEPROM.get(MAX_CURR_ADDR, *localDataPtr->maxCurrentHVPtr);
+//  EEPROM.get(MIN_CURR_ADDR, *localDataPtr->minCurrentHVPtr);
+//  EEPROM.get(MAX_SOC_ADDR, *localDataPtr->maxSOCPtr);
+//  EEPROM.get(MIN_SOC_ADDR, *localDataPtr->minSOCPtr);
  
   Serial.println("Finish startup");
 }
@@ -420,7 +421,7 @@ static void schedulerFunction(void* arg){
 //  TCB* taskNode = localDataPtr->firstNode;
   TCB* taskNode = head;
 
-//  Serial.println(*localDataPtr->taskCounterPtr);
+  Serial.println(*localDataPtr->taskCounterPtr);
   if (*localDataPtr->taskCounterPtr % 10 == 9){
     insertFunction(&tftTask);
     insertFunction(&terminalTask);
@@ -485,9 +486,9 @@ static void loggingFunction(void* arg){
     *localDataPtr->minCurrentHVPtr = 25.0;
     *localDataPtr->maxVoltageHVPtr = 0.0;
     *localDataPtr->minVoltageHVPtr = 450.0;
-
-//    localDataPtr.minSOCPtr
-//    localDataPtr.maxSOCPtr
+    Serial.println("////////////////////////////////Resetting");
+//    *localDataPtr->minSOCPtr = 0.0;
+//    *localDataPtr->maxSOCPtr = 0.0;
 
     EEPROM.put(address, -1);    // EEPROM max volt
     address += sizeof(*localDataPtr->maxVoltageHVPtr);
@@ -502,20 +503,28 @@ static void loggingFunction(void* arg){
     EEPROM.put(address, -1);          // EEPROM max SOC
     address += sizeof(*localDataPtr->maxSOCPtr);
     EEPROM.put(address, -1);         // EEPROM min SOC
+    *localDataPtr->resetEEPROMPtr = false;
 
   } else{
     if (*localDataPtr->maxVoltChangePtr){
       EEPROM.put(MAX_VOLT_ADDR, *localDataPtr->maxVoltageHVPtr);    // EEPROM max volt
+      *localDataPtr->maxVoltChangePtr = false;
+      Serial.println("Writing to VoltageMax EEPROM");
     } else if (*localDataPtr->minVoltChangePtr){
       EEPROM.put(MIN_VOLT_ADDR, *localDataPtr->minVoltageHVPtr);    // EEPROM min volt
+      *localDataPtr->minVoltChangePtr = false;
     } else if (*localDataPtr->maxCurrChangePtr){
       EEPROM.put(MAX_CURR_ADDR, *localDataPtr->maxCurrentHVPtr);    // EEPROM max current
+      *localDataPtr->maxCurrChangePtr = false;
     } else if (*localDataPtr->minCurrChangePtr){
       EEPROM.put(MIN_CURR_ADDR, *localDataPtr->minCurrentHVPtr);    // EEPROM min current
+      *localDataPtr->minCurrChangePtr = false;
     } else if (*localDataPtr->maxSOCChangePtr){
       EEPROM.put(MAX_SOC_ADDR, *localDataPtr->maxSOCPtr);          // EEPROM max SOC
+      *localDataPtr->maxSOCChangePtr = false;
     } else if (*localDataPtr->minSOCChangePtr){
       EEPROM.put(MIN_SOC_ADDR, *localDataPtr->minSOCPtr);         // EEPROM min SOC
+      *localDataPtr->minSOCChangePtr = false;
     }
   } 
 }
@@ -543,8 +552,7 @@ void intraSystemCommFunction(void* arg){
   
   *localDataPtr->voltageHVPtr = (volt / 1024.0) * 450;     // Converting according to voltage range
   *localDataPtr->currentHVPtr = (current / 1024.0) * 50.0 - 25;    // Converting according to current range
-//  Serial.println( *localDataPtr->voltageHVPtr);
-//  Serial.println( *localDataPtr->currentHVPtr);
+
 }
 
 // TFT display + keypad task that is capable of displaying one of the three screens (measurement, alarm, batteryon/off) at a time   1hz
@@ -588,7 +596,7 @@ void tftFunction(void* arg){
     }
     samplePress(localDataPtr);    // Updates the measurement screen values
     tft.setCursor(190, MEASURE_Y_SPACING);
-    tft.print(*(localDataPtr->socPtr));
+    tft.print((int)*(localDataPtr->socPtr));
   
     tft.setCursor(143, 2*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->tempPtr));
@@ -736,17 +744,20 @@ static void measureFunction(void* arg){                                 // 10Hz
   *localDataPtr->modeHVPtr = "0";
   
   intraSystemCommFunction(localDataPtr->dataiSCPtr);    // Calls the intra-system comm task to obtain current and voltage Uart data
-
+ 
+//  Serial.println( *localDataPtr->voltageHVPtr);
+//  Serial.println(*localDataPtr->maxVoltageHVPtr);
+//  Serial.println(*localDataPtr->minVoltageHVPtr);
+//  Serial.println();
   if (*localDataPtr->voltageHVPtr != *localDataPtr->maxVoltageHVPtr || *localDataPtr->voltageHVPtr != *localDataPtr->minVoltageHVPtr){
     if (*localDataPtr->voltageHVPtr > *localDataPtr->maxVoltageHVPtr){    // Update min and max HV Values
       *localDataPtr->maxVoltageHVPtr = *localDataPtr->voltageHVPtr;
       *localDataPtr->maxVoltChangePtr = true;
+      Serial.println("Change Max");
     } else if (*localDataPtr->voltageHVPtr < *localDataPtr->minVoltageHVPtr){
       *localDataPtr->minVoltageHVPtr = *localDataPtr->voltageHVPtr;
       *localDataPtr->minVoltChangePtr = true;
-    } else{
-      *localDataPtr->maxVoltChangePtr = false;
-      *localDataPtr->minVoltChangePtr = false;
+      Serial.println("Change Min");
     }
   }
 
@@ -757,10 +768,7 @@ static void measureFunction(void* arg){                                 // 10Hz
     } else if (*localDataPtr->currentHVPtr < *localDataPtr->minCurrentHVPtr){
       *localDataPtr->minCurrentHVPtr = *localDataPtr->currentHVPtr;
       *localDataPtr->minCurrChangePtr = true;
-    } else{
-      *localDataPtr->maxCurrChangePtr = false;
-      *localDataPtr->minCurrChangePtr = false;
-    }
+    } 
   }
 
   if (*localDataPtr->socHVPtr != *localDataPtr->maxSOCPtr || *localDataPtr->socHVPtr != *localDataPtr->minSOCPtr){
@@ -770,9 +778,6 @@ static void measureFunction(void* arg){                                 // 10Hz
     } else if (*localDataPtr->socHVPtr < *localDataPtr->minSOCPtr){
       *localDataPtr->minSOCPtr = *localDataPtr->socHVPtr;
       *localDataPtr->minSOCChangePtr = true;
-    } else{
-      *localDataPtr->maxSOCChangePtr = false;
-      *localDataPtr->minSOCChangePtr = false;
     }
   }
 
@@ -790,21 +795,29 @@ static void measureFunction(void* arg){                                 // 10Hz
 // SOC task that calculates the vlaue based on temperature, terminal voltage,
 // current and internal battery resistance. Operatres at 10hz
 static void socFunction(void* arg){
-  int voc = 0.5*currentHV + voltageHV;   // Stores HV current data
-  int socValue;
-  if (voc == 200 || voc == 400) {
-    socValue = 0;
-  } else if (temperatureHV == -10){
-    socValue = (1/125)*(voc*voc)-(39/10)*voc+485;
-  } else if (temperatureHV == 0) {
-    socValue = (1/125)*(voc*voc)-4*voc+500;
-  }else if (temperatureHV == 25) {
-    socValue = (1/125)*(voc*voc)-(21/5)*voc+550;
-  } else { // temperatureHV == 45
-    socValue = (1/100)*(voc*voc)-(11/2)*voc+750;
-  }
   dataSOC* localDataPtr = (dataSOC* ) arg;
-  *(localDataPtr->socPtr) = (int)socValue;
+  float socValue = 0;
+  float voc = 0.5*currentHV + voltageHV;   // Stores HV current data
+  if (voc <= 200) {
+    socValue = 0;
+  } else if (voc >= 400){
+    socValue = 100;
+  } else if (temperatureHV == -10){
+    socValue = 1/30000.0*(voc*voc*voc) - 11/500.0*voc*voc + 301.0/60*voc - 390.0;
+  } else if (temperatureHV == 0) {
+    socValue = 2.0/1171875*(voc*voc*voc*voc) - 109.0/46875*(voc*voc*voc) + 2203.0/1875*(voc*voc) - 19496.0/75*voc + 21220.0;
+  }else if (temperatureHV == 25) {
+    socValue = -1/15000.0*(voc*voc*voc) + 17/250.0*voc*voc - 661.0/30*voc + 2300.0;
+  } else { // temperatureHV == 45
+    socValue = voc - 300;
+  }
+   if (socValue > 100){
+    socValue = 100;
+  } else if (socValue < 0){
+    socValue = 0.0;
+  }
+  
+  *(localDataPtr->socPtr) = socValue;
 }
 
 // Contacter task that applies contactor state diagram    10hz
@@ -1038,7 +1051,7 @@ void initializeStructs(){
 // Timer Base 10Hz ISR
 void timerISR(){
   timeBaseFlag = 1;
-  taskCounter++;
+  taskCounter = taskCounter + 1;
 }
 
 // High Voltage Interlock IRS
