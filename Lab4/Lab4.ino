@@ -10,6 +10,7 @@
 #define CONTACT_INDICATOR_PIN   23
 #define HVIL_READ_PIN           24
 #define HVIL_ISR_PIN            21  // INT.1
+#define SAMPLE_ISR_PIN          50
 #define HV_INPUT                // Still need to deside
 #define MEASURE_Y_SPACING       30
 #define MEASURE_TEXT_SIZE       2
@@ -86,6 +87,7 @@ static TCB* head = taskArray[0];
 static TCB* tail = taskArray[3];
 
 static long waitTime;
+static bool fasterSampleEnable = false;
 
 static int screenDisplay = MEASUREMENT_SCREEN;  // Variable that determines which screen to show during TFT task
 
@@ -330,9 +332,11 @@ void setup() {
   Timer1.initialize(100000);    // Sets up Timer Interrupt
   Timer1.attachInterrupt(timerISR);  
 
+
 //   Initialize HVIL ISR
   pinMode(HVIL_ISR_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(HVIL_ISR_PIN), hvilISR, RISING);
+
 }
 
 void loop() {
@@ -426,18 +430,21 @@ static void schedulerFunction(void* arg){
 //  TCB* taskNode = localDataPtr->firstNode;
   TCB* taskNode = head;
 
-  if ((*localDataPtr->taskCounterPtr) - (oneHertzCounter * 10) >= 9){
+  if ((*localDataPtr->taskCounterPtr) - (oneHertzCounter * 10) >= 9){   // For adding in tft task and terminal task every 1 Hz
     insertFunction(&tftTask);
     insertFunction(&terminalTask);
     oneHertzCounter++;
   }
-  if ((*localDataPtr->taskCounterPtr - (fiveHertzCounter * 50)) >= 49){
+  if ((*localDataPtr->taskCounterPtr - (fiveHertzCounter * 50)) >= 49){   // For adding logging task every 0.2 Hz
     insertFunction(&loggingTask);
     fiveHertzCounter++;
   }
   
   while(taskNode != NULL){          
     taskNode->myTask((taskNode->taskDataPtr));    // Iterate through each node in the doubly linkedlist and call the respective task function
+    if(fasterSampleEnable){
+      samplePress(tftTask.taskDataPtr); 
+    }
     taskNode = taskNode->next;
   }
   if (*localDataPtr->taskCounterPtr % 10 == 9){
@@ -455,8 +462,9 @@ static void terminalFunction(void* arg){
     Serial.println("[1]   Reset EEPROM");
     Serial.println("[2]   Operating HV Current Range [Hi, Lo]");
     Serial.println("[3]   Operating HV Voltage Range [Hi, Lo]");
+    Serial.println("[4]   Increase Sample Reaction");
     Serial.println();
-    Serial.print("Enter your menu choice [1-3]: ");
+    Serial.print("Enter your menu choice [1-4]: ");
     *localDataPtr->firstTerminalPrintPtr = false;
   } else{
     if (Serial.available() > 0){
@@ -478,6 +486,9 @@ static void terminalFunction(void* arg){
         Serial.print(", ");
         Serial.print(*localDataPtr->minVoltageHVPtr);
         Serial.println("]");
+      }else if (userInput == '4'){
+        Serial.println("Sample Frequency Increased");
+        fasterSampleEnable = true;
       }
       *localDataPtr->firstTerminalPrintPtr = true;
       Serial.println();
@@ -609,7 +620,9 @@ void tftFunction(void* arg){
    
     tft.setCursor(135, 3*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->currentHVPtr));
-    samplePress(localDataPtr); 
+    if(fasterSampleEnable){
+      samplePress(localDataPtr); 
+    } 
     tft.setCursor(135, 4*MEASURE_Y_SPACING);
     tft.print(*(localDataPtr->voltageHVPtr));
   
@@ -634,7 +647,9 @@ void tftFunction(void* arg){
       tft.setCursor(0, 2*MEASURE_Y_SPACING);    // Displays HVI Alarm data
       tft.setTextSize(MEASURE_TEXT_SIZE);
       tft.print("HVILAlarm: ");
-      samplePress(localDataPtr); 
+      if(fasterSampleEnable){
+        samplePress(localDataPtr); 
+      }
       tft.setCursor(0, 4*MEASURE_Y_SPACING);   // Displays Overcurrent data
       tft.print("Overcurrent: ");
 
@@ -661,7 +676,9 @@ void tftFunction(void* arg){
 
     tft.setCursor(0, 4.5*MEASURE_Y_SPACING);
     tft.print(*localDataPtr->ocurrPtr);
-    samplePress(localDataPtr); 
+    if(fasterSampleEnable){
+      samplePress(localDataPtr); 
+    }
     tft.setCursor(0, 6.5*MEASURE_Y_SPACING);
     tft.print(*localDataPtr->hvorPtr); 
     samplePress(localDataPtr);
@@ -1080,3 +1097,8 @@ void hvilISR() {
     digitalWrite(CONTACT_INDICATOR_PIN, LOW);
   }
 }
+
+//void sampleDetectISR(){
+//  Serial.println("Faster sample enabled");
+//  fasterSampleEnable = true;
+//}
