@@ -116,6 +116,8 @@ volatile static byte command;  // Command to specify which data is desired
 static long isolResHV;
 static String modeHV;
 bool firstTerminalPrint = true;
+static int fiveHertzCounter;
+static int oneHertzCounter;
 
 /////////////////// taskDataPtr instantiations for each task ///////////////
 struct alarmStruct{
@@ -253,6 +255,8 @@ volatile bool minSOCChange = false;
 volatile bool maxSOCChange = false;
 
 volatile int resetEEPROM = false;
+volatile long getTime = 0xfffffffff;
+bool refresh;
 
 TSPoint p;
 
@@ -421,13 +425,14 @@ static void schedulerFunction(void* arg){
 //  TCB* taskNode = localDataPtr->firstNode;
   TCB* taskNode = head;
 
-  Serial.println(*localDataPtr->taskCounterPtr);
-  if (*localDataPtr->taskCounterPtr % 10 == 9){
+  if ((*localDataPtr->taskCounterPtr) - (oneHertzCounter * 10) >= 9){
     insertFunction(&tftTask);
     insertFunction(&terminalTask);
-  } 
-  if (*localDataPtr->taskCounterPtr % 50 == 49){
+    oneHertzCounter++;
+  }
+  if ((*localDataPtr->taskCounterPtr - (fiveHertzCounter * 50)) >= 49){
     insertFunction(&loggingTask);
+    fiveHertzCounter++;
   }
   
   while(taskNode != NULL){          
@@ -458,6 +463,8 @@ static void terminalFunction(void* arg){
       Serial.println(userInput);
       if (userInput == '1'){
         *localDataPtr->resetEEPROMPtr = true;
+        refresh = true;
+        getTime = millis();
       } else if (userInput == '2'){
         Serial.print("[");
         Serial.print(*localDataPtr->maxCurrentHVPtr);
@@ -482,34 +489,32 @@ static void loggingFunction(void* arg){
   dataLogging* localDataPtr = (dataLogging* )arg;
   int address = 0;
   if (*localDataPtr->resetEEPROMPtr == true){
-    *localDataPtr->maxCurrentHVPtr = -25.0;
-    *localDataPtr->minCurrentHVPtr = 25.0;
-    *localDataPtr->maxVoltageHVPtr = 0.0;
-    *localDataPtr->minVoltageHVPtr = 450.0;
-    Serial.println("////////////////////////////////Resetting");
-//    *localDataPtr->minSOCPtr = 0.0;
-//    *localDataPtr->maxSOCPtr = 0.0;
+    *localDataPtr->maxCurrentHVPtr = 0.0f;
+    *localDataPtr->minCurrentHVPtr = 0.0f;
+    *localDataPtr->maxVoltageHVPtr = -1.0f;
+    *localDataPtr->minVoltageHVPtr = -1.0f;
+    *localDataPtr->minSOCPtr = -1.0f;
+    *localDataPtr->maxSOCPtr = -1.0f;
 
-    EEPROM.put(address, -1);    // EEPROM max volt
+    EEPROM.put(address, -1.0f);    // EEPROM max volt
     address += sizeof(*localDataPtr->maxVoltageHVPtr);
-    EEPROM.put(address, -1);    // EEPROM min volt
+    EEPROM.put(address, -1.0f);    // EEPROM min volt
     address += sizeof(*localDataPtr->minVoltageHVPtr);
     
-    EEPROM.put(address, 0);    // EEPROM max current
+    EEPROM.put(address, 0.0f);    // EEPROM max current
     address += sizeof(*localDataPtr->maxCurrentHVPtr);
-    EEPROM.put(address, 0);    // EEPROM min current
+    EEPROM.put(address, 0.0f);    // EEPROM min current
     address += sizeof(*localDataPtr->minCurrentHVPtr);  
 
-    EEPROM.put(address, -1);          // EEPROM max SOC
+    EEPROM.put(address, -1.0f);          // EEPROM max SOC
     address += sizeof(*localDataPtr->maxSOCPtr);
-    EEPROM.put(address, -1);         // EEPROM min SOC
+    EEPROM.put(address, -1.0f);         // EEPROM min SOC
     *localDataPtr->resetEEPROMPtr = false;
 
   } else{
     if (*localDataPtr->maxVoltChangePtr){
       EEPROM.put(MAX_VOLT_ADDR, *localDataPtr->maxVoltageHVPtr);    // EEPROM max volt
       *localDataPtr->maxVoltChangePtr = false;
-      Serial.println("Writing to VoltageMax EEPROM");
     } else if (*localDataPtr->minVoltChangePtr){
       EEPROM.put(MIN_VOLT_ADDR, *localDataPtr->minVoltageHVPtr);    // EEPROM min volt
       *localDataPtr->minVoltChangePtr = false;
@@ -744,24 +749,28 @@ static void measureFunction(void* arg){                                 // 10Hz
   *localDataPtr->modeHVPtr = "0";
   
   intraSystemCommFunction(localDataPtr->dataiSCPtr);    // Calls the intra-system comm task to obtain current and voltage Uart data
- 
-//  Serial.println( *localDataPtr->voltageHVPtr);
-//  Serial.println(*localDataPtr->maxVoltageHVPtr);
-//  Serial.println(*localDataPtr->minVoltageHVPtr);
-//  Serial.println();
-  if (*localDataPtr->voltageHVPtr != *localDataPtr->maxVoltageHVPtr || *localDataPtr->voltageHVPtr != *localDataPtr->minVoltageHVPtr){
+
+  if ((millis() - getTime >= 5000) && refresh){
+    *localDataPtr->maxVoltageHVPtr = *localDataPtr->voltageHVPtr;
+    *localDataPtr->minVoltageHVPtr = *localDataPtr->voltageHVPtr;
+    *localDataPtr->maxCurrentHVPtr = *localDataPtr->currentHVPtr;
+    *localDataPtr->minCurrentHVPtr = *localDataPtr->currentHVPtr;
+    *localDataPtr->maxSOCPtr = *localDataPtr->socHVPtr;
+    *localDataPtr->minSOCPtr = *localDataPtr->socHVPtr;
+    refresh = false;
+  }
+  
+  if ((*localDataPtr->voltageHVPtr != *localDataPtr->maxVoltageHVPtr || *localDataPtr->voltageHVPtr != *localDataPtr->minVoltageHVPtr) && (millis()-getTime >= 5000)){
     if (*localDataPtr->voltageHVPtr > *localDataPtr->maxVoltageHVPtr){    // Update min and max HV Values
       *localDataPtr->maxVoltageHVPtr = *localDataPtr->voltageHVPtr;
       *localDataPtr->maxVoltChangePtr = true;
-      Serial.println("Change Max");
     } else if (*localDataPtr->voltageHVPtr < *localDataPtr->minVoltageHVPtr){
       *localDataPtr->minVoltageHVPtr = *localDataPtr->voltageHVPtr;
       *localDataPtr->minVoltChangePtr = true;
-      Serial.println("Change Min");
     }
   }
 
-  if (*localDataPtr->currentHVPtr != *localDataPtr->maxCurrentHVPtr || *localDataPtr->currentHVPtr != *localDataPtr->minCurrentHVPtr){
+  if ((*localDataPtr->currentHVPtr != *localDataPtr->maxCurrentHVPtr || *localDataPtr->currentHVPtr != *localDataPtr->minCurrentHVPtr) && (millis()-getTime >= 5000)){
     if (*localDataPtr->currentHVPtr > *localDataPtr->maxCurrentHVPtr){    // Update min and max Curr Values
       *localDataPtr->maxCurrentHVPtr = *localDataPtr->currentHVPtr;
       *localDataPtr->maxCurrChangePtr = true;
@@ -771,7 +780,7 @@ static void measureFunction(void* arg){                                 // 10Hz
     } 
   }
 
-  if (*localDataPtr->socHVPtr != *localDataPtr->maxSOCPtr || *localDataPtr->socHVPtr != *localDataPtr->minSOCPtr){
+  if ((*localDataPtr->socHVPtr != *localDataPtr->maxSOCPtr || *localDataPtr->socHVPtr != *localDataPtr->minSOCPtr) && (millis()-getTime >= 5000)){
     if (*localDataPtr->socHVPtr > *localDataPtr->maxSOCPtr){    // Update min and max SOC Values
       *localDataPtr->maxSOCPtr = *localDataPtr->socHVPtr;
       *localDataPtr->maxSOCChangePtr = true;
@@ -1051,7 +1060,7 @@ void initializeStructs(){
 // Timer Base 10Hz ISR
 void timerISR(){
   timeBaseFlag = 1;
-  taskCounter = taskCounter + 1;
+  taskCounter++;
 }
 
 // High Voltage Interlock IRS
